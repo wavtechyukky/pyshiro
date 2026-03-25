@@ -96,6 +96,24 @@ pyshiro-train \
 - Python 3.10 以上
 - numpy, scipy, soundfile, numba, msgpack
 
+## TODO
+
+オリジナル SHIRO との機能差を埋めるべく、以下の実装を予定しています。
+
+- [ ] **スキップ可能音素**（`pskip`）: phonemap に確率を指定することで、pau/br などを実際に存在しない場合にスキップできる
+- [ ] **音素内トポロジー選択**（type-b / type-c / skip-boundary）: 状態間のスキップ遷移で短い音素を柔軟に扱う
+- [ ] **HMM ブートストラップ訓練**（`shiro-rest -g` 相当）: HSMM 訓練の前段として HMM で事前学習し、収束を改善する
+- [ ] **DAEM 訓練**（`shiro-rest -D` 相当）: 温度係数付き EM によりフラットスタートからの精度を向上させる
+- [ ] **`shiro-untie` 相当**: モノフォンモデルをトライフォンに展開するツール
+- [ ] **`br`（吐息）音素対応**: 訓練データに br ラベルを含めた専用モデルの学習と同梱
+- [ ] **GMM 混合数の増加**: 現在 nmix=1 固定。複数混合成分による表現力向上
+- [ ] **Audacity ラベル入出力**: `.lab` ↔ Audacity テキストファイル変換
+
+## 謝辞
+
+- **[Sleepwalking (Kanru Hua)](https://github.com/Sleepwalking)** — オリジナル [SHIRO](https://github.com/Sleepwalking/SHIRO) および [liblrhsmm](https://github.com/Sleepwalking/liblrhsmm) の設計・実装。本プロジェクトのアルゴリズムと `.hsmm` フォーマットはこれらに基づいています。
+- **[intunist](https://github.com/intunist)** — 日本語 17.8 時間コーパスで訓練した [SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese) の公開。同梱の訓練済みモデルはこのリポジトリのものです。
+
 ## ライセンス
 
 GPLv3 — オリジナルの [SHIRO](https://github.com/Sleepwalking/SHIRO) および [liblrhsmm](https://github.com/Sleepwalking/liblrhsmm) に準拠します。
