@@ -1,17 +1,19 @@
 # pyshiro
 
-Python reimplementation of [SHIRO](https://github.com/Sleepwalking/SHIRO) — a phoneme-to-speech forced alignment toolkit based on Hidden Semi-Markov Models (HSMM), designed for Japanese singing voice.
+[SHIRO](https://github.com/Sleepwalking/SHIRO)（Hidden Semi-Markov Model ベースの音素強制アライメントツール）の Python 再実装です。日本語歌声を主なターゲットとしています。
 
-## Features
+英語版: [README.en.md](README.en.md)
 
-- **Forced alignment**: Align phoneme transcriptions with audio using HSMM Viterbi decoding
-- **2-pass alignment**: HMM bootstrap → HSMM refinement (same approach as original SHIRO)
-- **Model training**: Train `.hsmm` models from a labeled corpus
-- **Label output**: HTK `.lab` (ENUNU/UTAU compatible) and Praat TextGrid
-- **Kana-to-phoneme conversion**: Japanese hiragana → phoneme sequence
-- **Lightweight**: Core depends only on `numpy`, `scipy`, `soundfile`, `numba`, `msgpack`
+## 特徴
 
-## Installation
+- **強制アライメント**: HSMM Viterbi デコーディングによる音素と音声の位置合わせ
+- **2パスアライメント**: HMM でブートストラップ → HSMM で精細化（オリジナル SHIRO と同方式）
+- **モデル訓練**: ラベル付きコーパスから `.hsmm` モデルを学習
+- **ラベル出力**: HTK `.lab`（ENUNU/UTAU 互換）および Praat TextGrid
+- **かな→音素変換**: ひらがな歌詞 → 音素列変換（ENUNU 互換）
+- **軽量**: コア部分の依存は `numpy` / `scipy` / `soundfile` / `numba` / `msgpack` のみ
+
+## インストール
 
 ```bash
 git clone --recurse-submodules https://github.com/your-username/pyshiro
@@ -19,38 +21,38 @@ cd pyshiro
 pip install -e .
 ```
 
-> `--recurse-submodules` clones the bundled pre-trained models under `models/`.
+> `--recurse-submodules` を付けると `models/` 以下の訓練済みモデルも同時に取得できます。
 
-## Quick Start
+## クイックスタート
 
 ```python
 import pyshiro
 
-# Load pre-trained model
+# 訓練済みモデルを読み込む
 model    = pyshiro.load_hsmm("models/intunist-jp6_generic.hsmm")
 phonemap = pyshiro.load_phonemap("models/intunist-jp6_phonemap.json")
 
-# Extract features
+# 特徴量を抽出
 streams  = pyshiro.extract_mfcc_from_file("audio.wav")
 
-# Convert lyrics to phonemes
-table    = pyshiro.load_table()   # bundled kana2phonemes table
+# 歌詞を音素列に変換
+table    = pyshiro.load_table()   # 同梱の kana2phonemes テーブルを使用
 phonemes = pyshiro.convert_lyric_file("lyrics.txt", table)
 
-# Align
+# アライメント
 T         = streams[0].shape[0]
 state_seq = pyshiro.build_state_sequence(phonemes, phonemap, T)
 segments  = pyshiro.forced_align_2pass(model, streams, state_seq)
 
-# Save as .lab
+# .lab ファイルに書き出す
 from pyshiro.labels import segments_to_phoneme_intervals, write_lab
 intervals = segments_to_phoneme_intervals(phonemes, segments)
 write_lab(intervals, "output.lab")
 ```
 
-## Lyrics Format
+## 歌詞ファイルのフォーマット
 
-The lyrics `.txt` file should be written in hiragana, one phrase per line. Each line break becomes a `pau` (pause) in the phoneme sequence.
+歌詞 `.txt` はひらがなで1フレーズ1行で記述します。改行が `pau`（ポーズ）になります。
 
 ```
 きっと
@@ -58,7 +60,7 @@ The lyrics `.txt` file should be written in hiragana, one phrase per line. Each 
 そらまでとどく
 ```
 
-Breath (`br`) and pause (`pau`) can also be written directly:
+吐息（`br`）や無音（`pau`）は直接記述することもできます：
 
 ```
 pau
@@ -70,13 +72,13 @@ br
 ## CLI
 
 ```bash
-# Alignment
+# アライメント
 pyshiro-align audio.wav lyrics.txt \
   --model models/intunist-jp6_generic.hsmm \
   --phonemap models/intunist-jp6_phonemap.json \
   --out output.lab
 
-# Training
+# 訓練
 pyshiro-train \
   --wav_dir  corpus/wav \
   --lab_dir  corpus/lab \
@@ -85,15 +87,15 @@ pyshiro-train \
   --iters    5
 ```
 
-## Pre-trained Models
+## 訓練済みモデル
 
-Pre-trained Japanese models are included as a git submodule from [intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese), trained on 17.8 hours of male and female Japanese speech.
+[intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese) を git submodule として同梱しています。男女を含む日本語 17.8 時間のデータセットで訓練されたモデルです。
 
-## Requirements
+## 動作環境
 
-- Python 3.10+
+- Python 3.10 以上
 - numpy, scipy, soundfile, numba, msgpack
 
-## License
+## ライセンス
 
-GPLv3 — same as the original [SHIRO](https://github.com/Sleepwalking/SHIRO) and [liblrhsmm](https://github.com/Sleepwalking/liblrhsmm).
+GPLv3 — オリジナルの [SHIRO](https://github.com/Sleepwalking/SHIRO) および [liblrhsmm](https://github.com/Sleepwalking/liblrhsmm) に準拠します。
