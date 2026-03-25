@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.DS_Store
+dist/
+build/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+*.hsmm
+!models/**/*.hsmm
