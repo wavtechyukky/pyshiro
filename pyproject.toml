@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pyshiro"
+version = "0.1.0"
+description = "Python reimplementation of SHIRO phoneme-to-speech alignment toolkit for Japanese singing voice"
+readme = "README.md"
+license = { text = "GPLv3" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "soundfile",
+    "numba",
+    "msgpack",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+pyshiro-align = "pyshiro.align:main"
+pyshiro-train = "pyshiro.train:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+pyshiro = ["data/*.table"]
