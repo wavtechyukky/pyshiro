@@ -95,3 +95,44 @@ def write_textgrid(intervals: List[Tuple[int, int, str]],
         ]
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Audacity ラベル形式
+# ---------------------------------------------------------------------------
+
+def write_audacity(intervals: List[Tuple[int, int, str]],
+                   out_path: Path) -> None:
+    """
+    Audacity ラベルファイル (.txt) を書き出す。
+    形式: start_sec <TAB> end_sec <TAB> label  （1行1ラベル）
+    """
+    lines = []
+    for start, end, ph in intervals:
+        s = round(start * HOP_TIME, _PREC)
+        e = round(end   * HOP_TIME, _PREC)
+        lines.append(f"{s}\t{e}\t{ph}")
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def read_audacity(path: Path) -> List[Tuple[float, float, str]]:
+    """
+    Audacity ラベルファイルを読み込む。
+
+    Returns
+    -------
+    list of (start_sec, end_sec, label)
+    """
+    intervals = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        start = float(parts[0])
+        end   = float(parts[1])
+        label = parts[2] if len(parts) >= 3 else ""
+        intervals.append((start, end, label))
+    return intervals

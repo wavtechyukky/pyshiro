@@ -10,3 +10,10 @@ build/
 venv/
 *.hsmm
 !models/**/*.hsmm
+!ckpt/pyshiro-jp.hsmm
+*.npz
+ckpt/
+!ckpt/pyshiro-jp.hsmm
+debug/
+/data/
+HANDOFF.md

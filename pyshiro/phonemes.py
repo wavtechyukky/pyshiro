@@ -80,9 +80,32 @@ def kana_to_phonemes(text: str, table: dict) -> List[str]:
     return phonemes
 
 
+def _expand_inline_tokens(line: str, table: dict) -> List[str]:
+    """
+    1行のテキストを音素列に変換する。
+    [xxx] 形式および裸の ASCII 英字列を音素トークンとして直接展開する。
+    例: "きっとbrとべば"  → ['k','i','cl','t','o','br','t','o','b','e','b','a']
+    例: "きっと[br]とべば" → 同上
+    """
+    import re
+    result = []
+    # [xxx] または裸の ASCII 英字列でトークン分割
+    for part in re.split(r'(\[[^\]]+\]|[A-Za-z]+)', line):
+        if not part:
+            continue
+        if part.startswith('[') and part.endswith(']'):
+            result.append(part[1:-1].strip())
+        elif part.isascii() and part.isalpha():
+            result.append(part)
+        else:
+            result.extend(kana_to_phonemes(part, table))
+    return result
+
+
 def text_to_phonemes(text: str, table: dict) -> List[str]:
     """複数行テキスト（歌詞ファイル全体）を音素列に変換する。
     空行 → pau、文頭・文末にも pau を付加。
+    行中に [br] / [pau] のようなインライントークンを埋め込める。
     """
     result: List[str] = ['pau']
 
@@ -92,7 +115,7 @@ def text_to_phonemes(text: str, table: dict) -> List[str]:
             if result[-1] != 'pau':
                 result.append('pau')
         else:
-            phs = kana_to_phonemes(line, table)
+            phs = _expand_inline_tokens(line, table)
             if phs:
                 result.extend(phs)
                 if result[-1] != 'pau':
@@ -105,8 +128,8 @@ def text_to_phonemes(text: str, table: dict) -> List[str]:
 
 
 def _is_phoneme_text(text: str) -> bool:
-    """スペース・改行・ASCII 英小文字のみ → 音素直書きファイルと判断。"""
-    return all(c in ' \n\r' or ('a' <= c <= 'z') for c in text)
+    """スペース・改行・ASCII 英字のみ → 音素直書きファイルと判断。"""
+    return all(c in ' \n\r' or ('a' <= c <= 'z') or ('A' <= c <= 'Z') for c in text)
 
 
 def _parse_phoneme_text(text: str) -> List[str]:
