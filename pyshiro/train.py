@@ -536,6 +536,83 @@ def collect_stats(
 
 
 # ---------------------------------------------------------------------------
+# テスト対数尤度の評価
+# ---------------------------------------------------------------------------
+
+def _eval_one_file(args):
+    """
+    ProcessPoolExecutor ワーカー。
+    1 ファイルを HSMM アライメントして (loglik, n_frames) を返す。
+    """
+    wav_path_str, lab_path_str, phonemap, model = args
+    from pyshiro.features import extract_mfcc_from_file
+    from pyshiro.align import build_state_sequence, forced_align_2pass
+
+    wav_path = Path(wav_path_str)
+    lab_path = Path(lab_path_str)
+
+    streams_feat = extract_mfcc_from_file(wav_path)
+    T = streams_feat[0].shape[0]
+    intervals = read_lab(lab_path)
+    phonemes  = [ph for _, _, ph in intervals]
+    state_seq = build_state_sequence(phonemes, phonemap, T)
+    _, loglik = forced_align_2pass(model, streams_feat, state_seq)
+    return loglik, T
+
+
+def compute_test_ll(
+    test_wav_dir: Path,
+    test_lab_dir: Path,
+    phonemap: dict,
+    model: HSMMModel,
+    n_jobs: int = 1,
+) -> float:
+    """
+    テストデータの HSMM 対数尤度（nats/frame）を返す。
+    アライメントのみ行い、モデルは更新しない。
+    """
+    args_list = []
+    for wav_path in sorted(test_wav_dir.glob("*.wav")):
+        lab_path = test_lab_dir / (wav_path.stem + ".lab")
+        if lab_path.exists():
+            args_list.append((str(wav_path), str(lab_path), phonemap, model))
+
+    if not args_list:
+        print("  テストデータなし", flush=True)
+        return float("nan")
+
+    total_ll = 0.0
+    total_frames = 0
+    n_ok = n_err = 0
+
+    if n_jobs <= 1:
+        for args in args_list:
+            try:
+                ll, nf = _eval_one_file(args)
+                total_ll += ll
+                total_frames += nf
+                n_ok += 1
+            except Exception as ex:
+                print(f"  テスト評価スキップ ({Path(args[0]).name}): {ex}", flush=True)
+                n_err += 1
+    else:
+        with ProcessPoolExecutor(max_workers=n_jobs) as ex:
+            futs = {ex.submit(_eval_one_file, a): a for a in args_list}
+            for fut in as_completed(futs):
+                try:
+                    ll, nf = fut.result()
+                    total_ll += ll
+                    total_frames += nf
+                    n_ok += 1
+                except Exception:
+                    n_err += 1
+
+    if total_frames == 0:
+        return float("nan")
+    return total_ll / total_frames
+
+
+# ---------------------------------------------------------------------------
 # M-step: モデルパラメータ更新
 # ---------------------------------------------------------------------------
 
@@ -630,6 +707,8 @@ def train(
     start_iter: int  = 0,
     n_jobs:     int  = 1,
     cap_relax_iter: int = None,
+    test_wav_dir: Path = None,
+    test_lab_dir: Path = None,
 ) -> None:
     """
     HSMM 訓練メインループ。
@@ -723,6 +802,11 @@ def train(
     align_iter = start_iter - 1 if start_iter > 0 else 0
     prev_ll: float = None  # 前イテレーションの対数尤度（nats/frame）
 
+    log_path = out_path.with_name(out_path.stem + "_log_loglikelihood.txt")
+    log_mode = "a" if start_iter > 0 else "w"
+    log_file = open(log_path, log_mode, buffering=1)
+    log_file.write("iter\ttrain_ll\ttest_ll\n" if log_mode == "w" else "")
+
     for it in range(start_iter, iters):
         # GMM 分割（指定イテレーション到達時）
         if it in split_iters:
@@ -764,21 +848,36 @@ def train(
             if prev_ll is not None:
                 diff = ll_per_frame - prev_ll
                 sign = "+" if diff >= 0 else ""
-                print(f"  対数尤度: {ll_per_frame:.4f} nats/frame  "
+                print(f"  訓練対数尤度: {ll_per_frame:.4f} nats/frame  "
                       f"(前回比: {sign}{diff:.4f})", flush=True)
             else:
-                print(f"  対数尤度: {ll_per_frame:.4f} nats/frame", flush=True)
+                print(f"  訓練対数尤度: {ll_per_frame:.4f} nats/frame", flush=True)
             prev_ll = ll_per_frame
+        else:
+            ll_per_frame = float("nan")
 
         model = update_model(model, suff_stats, dur_pool, global_varfloors)
+
+        # テスト対数尤度
+        test_ll = float("nan")
+        if test_wav_dir is not None and test_lab_dir is not None:
+            test_ll = compute_test_ll(test_wav_dir, test_lab_dir, phonemap, model,
+                                      n_jobs=n_jobs)
+            print(f"  テスト対数尤度: {test_ll:.4f} nats/frame", flush=True)
+
+        # ログファイルに記録
+        log_file.write(f"{it + 1}\t{ll_per_frame:.6f}\t{test_ll:.6f}\n")
 
         # イテレーションごとにチェックポイントを保存
         ckpt = out_path.with_suffix(f".iter{it + 1}.hsmm")
         save_hsmm(model, ckpt)
 
+    log_file.close()
+
     # --- 保存 ---
     save_hsmm(model, out_path)
     print(f"\n訓練完了: {out_path}", flush=True)
+    print(f"ログ: {log_path}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +910,10 @@ def main():
                         help=f"並列ワーカー数（デフォルト: CPU コア数）")
     parser.add_argument("--cap_relax_iter", type=int, default=None,
                         help="このイテレーション以降 hmm_cap を 200→1000 に緩和（デフォルト: None=常に200）")
+    parser.add_argument("--test_wav_dir", type=Path, default=None,
+                        help="テスト WAV ディレクトリ（--test_lab_dir と併用でテスト対数尤度を表示）")
+    parser.add_argument("--test_lab_dir", type=Path, default=None,
+                        help="テスト LAB ディレクトリ（--test_wav_dir と併用でテスト対数尤度を表示）")
     args = parser.parse_args()
 
     train(
@@ -826,6 +929,8 @@ def main():
         start_iter=args.start_iter,
         n_jobs=args.jobs,
         cap_relax_iter=args.cap_relax_iter,
+        test_wav_dir=args.test_wav_dir,
+        test_lab_dir=args.test_lab_dir,
     )
 
 
