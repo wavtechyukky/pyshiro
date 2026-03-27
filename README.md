@@ -9,24 +9,22 @@
 オリジナル [SHIRO](https://github.com/Sleepwalking/SHIRO) の機能をほぼ完全にPythonへ移植し、さらに独自機能を追加しています。特に日本語での学習・アノテーションをスムーズに行えるよう、専用のインターフェースを整備しています。
 
 **アライメント**
-- **HSMM 強制アライメント**: Viterbi デコーディング（Numba JIT で高速化）
-- **2パスアライメント**: HMM でブートストラップ → HSMM で精細化（オリジナル SHIRO と同方式）
-- **スキップ可能音素**（`pskip`）: phonemap に確率を指定することで pau / br などを省略可能
-- **音素内トポロジー選択**: type-a / type-b / type-c / skip-boundary を phonemap で指定
+- **HSMM 強制アライメント**: 音素境界を自動推定
+- **HMM→HSMM の2段階アライメント**: まず持続長を考慮しない HMM で粗いアライメントを行い、次に HSMM で精細化（オリジナル SHIRO と同方式）
+- **スキップ可能音素の指定**（`pskip`）: pau / br などを phonemap で省略可能に指定できる
+- **topology の設定**: 音素ごとの状態遷移パターンを phonemap で指定できる
 
 **訓練**
-- **Viterbi EM 訓練**: ラベル付きコーパスから `.hsmm` モデルを学習
-- **HMM ブートストラップ**（`--hmm_iters`）: 最初の N 反復を継続時間無視の HMM モードで訓練し、GMM パラメータを先に収束させる（`shiro-rest -g` 相当）
-- **DAEM 訓練**（`--daem`）: 温度アニーリングでフラットスタートの局所最適を回避（`shiro-rest -D` 相当）
-- **GMM 混合数増加**（`--nmix`）: 段階的な GMM 分割で表現力を向上
-- **トライフォン展開**（`pyshiro.untie`）: モノフォンモデルをコンテキスト依存に展開（`shiro-untie` 相当）
+- **コーパスからの学習**: ラベル付き音声コーパスから `.hsmm` モデルを学習
+- **HMM プレトレーニング**（`--hmm_iters`）: 持続長モデルを無効にした HMM モードで先にモデルを初期化してから HSMM 学習に移行（`shiro-rest -g` 相当）
+- **DAEM**（`--daem`）: アニーリングで学習を安定化（`shiro-rest -D` 相当）
+- **GMM 成分数の増加**（`--nmix`）: 段階的な GMM 分割で表現力を向上
+- **トライフォン化**（`pyshiro.untie`）: モノフォンモデルをコンテキスト依存モデルへ変換（`shiro-untie` 相当）
 
 **入出力**
-- **ラベル出力**: HTK `.lab`（ENUNU/UTAU 互換）、Praat TextGrid、Audacity ラベル
-- **ラベル読み込み**: HTK `.lab`、Audacity ラベル
-- **かな→音素変換**: ひらがな歌詞 → 音素列変換（ENUNU ETK 互換テーブルを同梱）
-
-**軽量**: コア部分の依存は `numpy` / `scipy` / `soundfile` / `numba` / `msgpack` のみ
+- **ラベル出力**: `.lab`（ENUNU 互換）、Praat TextGrid、Audacity ラベル
+- **ラベル読み込み**: `.lab`、Audacity ラベル
+- **かな→音素変換**: ひらがな歌詞 → 音素列変換（ENUNU の変換テーブルをベースに同梱）
 
 ## インストール
 
@@ -95,15 +93,7 @@ pau k i cl t o pau t o b e b a pau
 ## CLI
 
 ```bash
-# アライメント（サンプル: input_example/kiritan_01 を使う場合）
-# input_example/wav/ に WAV ファイルを置いてから実行
-pyshiro-align input_example/wav/kiritan_01_s003.wav \
-              input_example/kiritan_01/kiritan_01_s003.txt \
-  --model    ckpt/pyshiro-jp.hsmm \
-  --phonemap ckpt/pyshiro-jp_phonemap.json \
-  --out      output.lab
-
-# アライメント（一般）
+# アライメント
 pyshiro-align audio.wav lyrics.txt \
   --model    models/intunist-jp6_generic.hsmm \
   --phonemap models/intunist-jp6_phonemap.json \
@@ -122,9 +112,10 @@ pyshiro-train \
   --lab_dir  corpus/lab \
   --phonemap models/intunist-jp6_phonemap.json \
   --out      my_model.hsmm \
-  --iters    5
+  --iters    20 \
+  --jobs     8   # 並列ワーカー数（デフォルト: CPU コア数）
 
-# 訓練（HMM ブートストラップ + DAEM + GMM 混合数増加）
+# 訓練（HMM プレトレーニング + DAEM + GMM 成分数増加）
 pyshiro-train \
   --wav_dir   corpus/wav \
   --lab_dir   corpus/lab \
@@ -135,32 +126,19 @@ pyshiro-train \
   --daem \
   --nmix      4
 
-# 並列処理（デフォルト 8 並列）
-pyshiro-train \
-  --wav_dir  corpus/wav \
-  --lab_dir  corpus/lab \
-  --phonemap models/intunist-jp6_phonemap.json \
-  --out      my_model.hsmm \
-  --iters    5 \
-  --jobs     8
-
 # 途中から再開
 # イテレーション完了ごとに my_model.iter1.hsmm, my_model.iter2.hsmm ... が自動保存される
-# グローバル統計は my_model.globalstats.npz にキャッシュされ、2回目以降は再計算しない
 pyshiro-train \
   --wav_dir    corpus/wav \
   --lab_dir    corpus/lab \
   --phonemap   models/intunist-jp6_phonemap.json \
   --out        my_model.hsmm \
-  --iters      5 \
-  --jobs       8 \
-  --init_model my_model.iter1.hsmm \
-  --start_iter 1
+  --iters      20 \
+  --init_model my_model.iter10.hsmm \
+  --start_iter 10
 
-# cap_relax_iter（カリキュラム学習）
-# GMM が未成熟な訓練初期は HMM pass1 の探索範囲を状態あたり 200 フレームに制限し、
-# アライメントが迷子になるのを防ぐ。指定イテレーション以降は制限を解除する。
-# ロングトーンや長い pau を含むコーパスで有効。
+# cap_relax_iter: 訓練初期は探索範囲を制限し、後半で解除する
+# ロングトーンや長い pau を含むコーパスで収束が不安定な場合に有効
 pyshiro-train \
   --wav_dir        corpus/wav \
   --lab_dir        corpus/lab \
@@ -170,7 +148,7 @@ pyshiro-train \
   --hmm_iters      2 \
   --cap_relax_iter 10
 
-# トライフォン展開
+# トライフォン化
 python -m pyshiro.untie \
   --phonemap     models/intunist-jp6_phonemap.json \
   --model        my_model.hsmm \
@@ -179,7 +157,7 @@ python -m pyshiro.untie \
   --out_model    my_tri_model.hsmm
 ```
 
-## ラベル形式
+## ラベル出力
 
 ```python
 from pyshiro.labels import (
@@ -187,7 +165,7 @@ from pyshiro.labels import (
 )
 
 # 書き出し
-write_lab(intervals, "output.lab")           # HTK .lab (ENUNU/UTAU 互換)
+write_lab(intervals, "output.lab")           # .lab (ENUNU互換)
 write_textgrid(intervals, "output.TextGrid") # Praat TextGrid
 write_audacity(intervals, "output.txt")      # Audacity ラベル
 
@@ -195,7 +173,7 @@ write_audacity(intervals, "output.txt")      # Audacity ラベル
 intervals = read_audacity("corrected.txt")
 ```
 
-## スキップ可能音素（pskip）
+## スキップ可能音素の設定（pskip）
 
 phonemap の音素エントリに `"pskip"` を指定すると、その音素が実際に発音されていない場合にアライメントで省略されます。`br`（吐息）を多めに入力しても正しく処理できます。
 
@@ -208,7 +186,7 @@ phonemap の音素エントリに `"pskip"` を指定すると、その音素が
 }
 ```
 
-## 音素内トポロジー
+## topologyの設定
 
 ```json
 {
@@ -227,11 +205,11 @@ phonemap の音素エントリに `"pskip"` を指定すると、その音素が
 
 ## かな→音素変換テーブルについて
 
-同梱の `pyshiro/data/kana2phonemes.table` は SHIRO 本体には存在しない ENUNU 固有の機能です。[ENUNU](https://github.com/oatsu-gh/ENUNU) の `kana2phonemes_etk_001.table` をベースとしています。音素記号は ENUNU / UTAU / DiffSinger の `.lab` フォーマットと互換です。
+同梱の `pyshiro/data/kana2phonemes.table` は[ENUNU](https://github.com/oatsu-gh/ENUNU) の `kana2phonemes_etk_001.table` をベースとした音素変換テーブルです。
 
 ## 訓練済みモデル
 
-[intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese) を git submodule として同梱しています。男女を含む日本語 17.8 時間のデータセットで訓練されたモデルです。
+[intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese) を git submodule として同梱しています。男女を含む日本語17.8時間の歌唱音声のデータセットで訓練されたモデルです。
 
 ## 動作環境
 
@@ -245,7 +223,7 @@ phonemap の音素エントリに `"pskip"` を指定すると、その音素が
 ## 謝辞
 
 - **[Sleepwalking (Kanru Hua)](https://github.com/Sleepwalking)** — オリジナル [SHIRO](https://github.com/Sleepwalking/SHIRO) および [liblrhsmm](https://github.com/Sleepwalking/liblrhsmm) の設計・実装。本プロジェクトのアルゴリズムと `.hsmm` フォーマットはこれらに基づいています。
-- **[intunist](https://github.com/intunist)** — 日本語 17.8 時間コーパスで訓練した [SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese) の公開。同梱の訓練済みモデルはこのリポジトリのものです。
+- **[intunist](https://github.com/intunist)** — [SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese) 同梱の訓練済みモデルはこのリポジトリのものです。
 - **[oatsu-gh](https://github.com/oatsu-gh)** — [ENUNU](https://github.com/oatsu-gh/ENUNU) の開発。同梱のかな→音素変換テーブルは ENUNU の `kana2phonemes_etk_001.table` をベースとしています。
 
 ## ライセンス

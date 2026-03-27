@@ -9,22 +9,22 @@ Japanese: [README.md](README.md)
 This project is a near-complete Python port of the original [SHIRO](https://github.com/Sleepwalking/SHIRO), with additional features on top. It is specifically designed to make training and annotation for Japanese singing voice as smooth as possible.
 
 **Alignment**
-- **HSMM forced alignment**: Viterbi decoding accelerated with Numba JIT
-- **2-pass alignment**: HMM bootstrap → HSMM refinement (same approach as original SHIRO)
+- **HSMM forced alignment**: Automatic phoneme boundary estimation
+- **2-pass alignment**: HMM pre-training → HSMM refinement (same approach as original SHIRO)
 - **Skippable phonemes** (`pskip`): Phonemes such as `pau` / `br` can be skipped if absent, specified per-phoneme in the phonemap
-- **Intra-phoneme topology**: Choose type-a / type-b / type-c / skip-boundary per phoneme in the phonemap
+- **Topology setting**: Choose state transition pattern per phoneme in the phonemap
 
 **Training**
-- **Viterbi EM training**: Train `.hsmm` models from a labeled corpus
-- **HMM bootstrap** (`--hmm_iters`): Pre-train GMM parameters in duration-free HMM mode before enabling the HSMM duration model (equivalent to `shiro-rest -g`)
-- **DAEM training** (`--daem`): Temperature-annealed EM to avoid local optima from flat-start initialization (equivalent to `shiro-rest -D`)
+- **Corpus training**: Train `.hsmm` models from a labeled corpus
+- **HMM pre-training** (`--hmm_iters`): Initialize GMM parameters in duration-free HMM mode before enabling the HSMM duration model (equivalent to `shiro-rest -g`)
+- **DAEM** (`--daem`): Annealing-based training to stabilize convergence (equivalent to `shiro-rest -D`)
 - **GMM mixture splitting** (`--nmix`): Incrementally double the number of Gaussian components for greater expressiveness
 - **Triphone expansion** (`pyshiro.untie`): Expand a monophone model into context-dependent triphones (equivalent to `shiro-untie`)
 
 **I/O**
-- **Label output**: HTK `.lab` (ENUNU/UTAU/DiffSinger compatible), Praat TextGrid, Audacity labels
-- **Label input**: HTK `.lab`, Audacity labels
-- **Kana-to-phoneme**: Japanese hiragana → phoneme sequence (bundled ENUNU ETK-compatible table)
+- **Label output**: `.lab` (ENUNU compatible), Praat TextGrid, Audacity labels
+- **Label input**: `.lab`, Audacity labels
+- **Kana-to-phoneme**: Japanese hiragana → phoneme sequence (bundled table based on ENUNU's conversion table)
 
 **Lightweight**: Core depends only on `numpy`, `scipy`, `soundfile`, `numba`, `msgpack`
 
@@ -94,15 +94,7 @@ pau k i cl t o pau t o b e b a pau
 ## CLI
 
 ```bash
-# Alignment (sample: using input_example/kiritan_01)
-# Place the WAV file in input_example/wav/ first
-pyshiro-align input_example/wav/kiritan_01_s003.wav \
-              input_example/kiritan_01/kiritan_01_s003.txt \
-  --model    ckpt/pyshiro-jp.hsmm \
-  --phonemap ckpt/pyshiro-jp_phonemap.json \
-  --out      output.lab
-
-# Alignment (general)
+# Alignment
 pyshiro-align audio.wav lyrics.txt \
   --model    models/intunist-jp6_generic.hsmm \
   --phonemap models/intunist-jp6_phonemap.json \
@@ -121,9 +113,10 @@ pyshiro-train \
   --lab_dir  corpus/lab \
   --phonemap models/intunist-jp6_phonemap.json \
   --out      my_model.hsmm \
-  --iters    5
+  --iters    20 \
+  --jobs     8   # parallel workers (default: CPU core count)
 
-# Training (HMM bootstrap + DAEM + GMM splitting)
+# Training (HMM pre-training + DAEM + GMM splitting)
 pyshiro-train \
   --wav_dir   corpus/wav \
   --lab_dir   corpus/lab \
@@ -134,15 +127,6 @@ pyshiro-train \
   --daem \
   --nmix      4
 
-# Parallel processing (default: 8 workers)
-pyshiro-train \
-  --wav_dir  corpus/wav \
-  --lab_dir  corpus/lab \
-  --phonemap models/intunist-jp6_phonemap.json \
-  --out      my_model.hsmm \
-  --iters    5 \
-  --jobs     8
-
 # Resuming from a checkpoint
 # Checkpoints are saved automatically as my_model.iter1.hsmm, my_model.iter2.hsmm, ...
 pyshiro-train \
@@ -150,15 +134,12 @@ pyshiro-train \
   --lab_dir    corpus/lab \
   --phonemap   models/intunist-jp6_phonemap.json \
   --out        my_model.hsmm \
-  --iters      5 \
-  --jobs       8 \
-  --init_model my_model.iter1.hsmm \
-  --start_iter 1
+  --iters      20 \
+  --init_model my_model.iter10.hsmm \
+  --start_iter 10
 
-# cap_relax_iter (curriculum learning)
-# Constrains HMM pass-1 search to 200 frames/state in early training when the GMM is
-# immature, then releases the constraint after the specified iteration.
-# Useful for corpora with long sustained notes or long pauses.
+# cap_relax_iter: constrain the search range in early training, release it later
+# Useful for corpora with long sustained notes or long pauses
 pyshiro-train \
   --wav_dir        corpus/wav \
   --lab_dir        corpus/lab \
@@ -184,7 +165,8 @@ from pyshiro.labels import (
     write_lab, write_textgrid, write_audacity, read_audacity
 )
 
-write_lab(intervals, "output.lab")           # HTK .lab (ENUNU/UTAU/DiffSinger)
+# Write
+write_lab(intervals, "output.lab")           # .lab (ENUNU compatible)
 write_textgrid(intervals, "output.TextGrid") # Praat TextGrid
 write_audacity(intervals, "output.txt")      # Audacity labels
 
@@ -192,13 +174,43 @@ write_audacity(intervals, "output.txt")      # Audacity labels
 intervals = read_audacity("corrected.txt")
 ```
 
+## Skippable Phonemes (pskip)
+
+Adding `"pskip"` to a phoneme entry in the phonemap allows that phoneme to be skipped during alignment if it is not actually present. This lets you freely annotate `br` (breath) phonemes without worrying about false positives.
+
+```json
+{
+  "phone_map": {
+    "pau": { "pskip": 0.5, "states": [...] },
+    "br":  { "pskip": 0.5, "states": [...] }
+  }
+}
+```
+
+## Topology Setting
+
+```json
+{
+  "phone_map": {
+    "cl": { "topology": "type-b", "states": [...] }
+  }
+}
+```
+
+| topology | behavior |
+|---|---|
+| `type-a` (default) | left-to-right only: 0→1→2 |
+| `type-b` | adds skip from each state to the final state |
+| `type-c` | adds skip from each state two steps ahead |
+| `skip-boundary` | allows skipping the first and last states of a phoneme |
+
 ## Kana-to-Phoneme Table
 
-The bundled `pyshiro/data/kana2phonemes.table` is not part of the original SHIRO; it is an ENUNU-specific addition. It is based on the `kana2phonemes_etk_001.table` from [ENUNU](https://github.com/oatsu-gh/ENUNU) and is compatible with ENUNU / UTAU / DiffSinger `.lab` phoneme symbols.
+The bundled `pyshiro/data/kana2phonemes.table` is based on the `kana2phonemes_etk_001.table` from [ENUNU](https://github.com/oatsu-gh/ENUNU).
 
 ## Pre-trained Models
 
-Pre-trained Japanese models are included as a git submodule from [intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese), trained on 17.8 hours of male and female Japanese speech.
+Pre-trained Japanese models are included as a git submodule from [intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese), trained on 17.8 hours of male and female Japanese singing voice.
 
 ## Requirements
 

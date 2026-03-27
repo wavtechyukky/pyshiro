@@ -22,6 +22,7 @@ Viterbi 訓練（E-step=強制アライメント, M-step=最尤推定）で
 import argparse
 import json
 import math
+import os
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -806,8 +807,8 @@ def main():
                         help="初期モデル（省略時はフラットスタート）")
     parser.add_argument("--start_iter", type=int, default=0,
                         help="再開するイテレーション番号（0始まり）。--init_model と併用")
-    parser.add_argument("--jobs", type=int, default=8,
-                        help="並列ワーカー数（デフォルト: 8）")
+    parser.add_argument("--jobs", type=int, default=os.cpu_count(),
+                        help=f"並列ワーカー数（デフォルト: CPU コア数）")
     parser.add_argument("--cap_relax_iter", type=int, default=None,
                         help="このイテレーション以降 hmm_cap を 200→1000 に緩和（デフォルト: None=常に200）")
     args = parser.parse_args()
