@@ -1,0 +1,32 @@
+[
+  {
+    "name": "akai_kutsu_s001",
+    "source_wav": "akai_kutsu.wav",
+    "start_sample": 89280,
+    "end_sample": 445920,
+    "source_total_samples": 1553810,
+    "sample_rate": 16000,
+    "start_sec": 5.58,
+    "end_sec": 27.87
+  },
+  {
+    "name": "akai_kutsu_s002",
+    "source_wav": "akai_kutsu.wav",
+    "start_sample": 536640,
+    "end_sample": 904000,
+    "source_total_samples": 1553810,
+    "sample_rate": 16000,
+    "start_sec": 33.54,
+    "end_sec": 56.5
+  },
+  {
+    "name": "akai_kutsu_s003",
+    "source_wav": "akai_kutsu.wav",
+    "start_sample": 992480,
+    "end_sample": 1360800,
+    "source_total_samples": 1553810,
+    "sample_rate": 16000,
+    "start_sec": 62.03,
+    "end_sec": 85.05
+  }
+]

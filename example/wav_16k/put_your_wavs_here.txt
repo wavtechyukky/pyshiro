@@ -1,0 +1,2 @@
+Place 16kHz WAV files here.
+Run workflow/00_resample.py to convert from example/raw_wav/ automatically.

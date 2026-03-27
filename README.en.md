@@ -47,12 +47,12 @@ import pyshiro
 model    = pyshiro.load_hsmm("models/intunist-jp6_generic.hsmm")
 phonemap = pyshiro.load_phonemap("models/intunist-jp6_phonemap.json")
 
-# Extract features
-streams  = pyshiro.extract_mfcc_from_file("audio.wav")
+# Extract features (16kHz mono WAV)
+streams  = pyshiro.extract_mfcc_from_file("example/wav_16k/akai_kutsu.wav")
 
 # Convert lyrics to phonemes
 table    = pyshiro.load_table()   # bundled kana2phonemes table
-phonemes = pyshiro.convert_lyric_file("lyrics.txt", table)
+phonemes = pyshiro.convert_lyric_file("example/lyrics/akai_kutsu.txt", table)
 
 # Align
 T         = streams[0].shape[0]
@@ -62,8 +62,12 @@ segments  = pyshiro.forced_align_2pass(model, streams, state_seq)
 # Save as .lab
 from pyshiro.labels import segments_to_phoneme_intervals, write_lab
 intervals = segments_to_phoneme_intervals(phonemes, segments)
-write_lab(intervals, "output.lab")
+write_lab(intervals, "example/labels/akai_kutsu.lab")
 ```
+
+## Annotation Guide
+
+For those who want to use pyshiro for practical annotation, **[workflow/annotation_guide.ipynb](workflow/annotation_guide.ipynb)** walks you through the full workflow using a pre-trained model: resampling, segmentation, automatic alignment, manual correction, and merging back into a full-song `.lab`.
 
 ## Lyrics Format
 
@@ -113,7 +117,7 @@ pyshiro-train \
   --lab_dir  corpus/lab \
   --phonemap models/intunist-jp6_phonemap.json \
   --out      my_model.hsmm \
-  --iters    20 \
+  --iters    10 \
   --jobs     8   # parallel workers (default: CPU core count)
 
 # Training (HMM pre-training + DAEM + GMM splitting)
@@ -122,21 +126,21 @@ pyshiro-train \
   --lab_dir   corpus/lab \
   --phonemap  models/intunist-jp6_phonemap.json \
   --out       my_model.hsmm \
-  --iters     20 \
-  --hmm_iters 3 \
+  --iters     10 \
+  --hmm_iters 2 \
   --daem \
   --nmix      4
 
 # Resuming from a checkpoint
-# Checkpoints are saved automatically as my_model.iter1.hsmm, my_model.iter2.hsmm, ...
+# Checkpoints are saved automatically as my_model.iter001.hsmm, my_model.iter002.hsmm, ...
 pyshiro-train \
   --wav_dir    corpus/wav \
   --lab_dir    corpus/lab \
   --phonemap   models/intunist-jp6_phonemap.json \
   --out        my_model.hsmm \
-  --iters      20 \
-  --init_model my_model.iter10.hsmm \
-  --start_iter 10
+  --iters      10 \
+  --init_model my_model.iter005.hsmm \
+  --start_iter 5
 
 # cap_relax_iter: constrain the search range in early training, release it later
 # Useful for corpora with long sustained notes or long pauses
@@ -145,9 +149,9 @@ pyshiro-train \
   --lab_dir        corpus/lab \
   --phonemap       models/intunist-jp6_phonemap.json \
   --out            my_model.hsmm \
-  --iters          20 \
+  --iters          10 \
   --hmm_iters      2 \
-  --cap_relax_iter 10
+  --cap_relax_iter 5
 
 # Triphone expansion
 python -m pyshiro.untie \
@@ -156,7 +160,31 @@ python -m pyshiro.untie \
   --lab_dir      corpus/lab \
   --out_phonemap my_tri_phonemap.json \
   --out_model    my_tri_model.hsmm
+
+# Visualize alignment (outputs PNG with waveform, mel spectrogram, GT and estimated labels)
+python tests/plot_alignment.py \
+  --wav_dir  corpus/wav \
+  --lab_dir  corpus/lab \
+  --model    my_model.hsmm \
+  --phonemap my_phonemap.json \
+  --out_dir  plots
 ```
+
+## Training Tips
+
+Practical notes from real-world usage.
+
+**Keep input audio short**
+Files up to around 20 seconds tend to work reliably. Long silent sections (`pau`) can cause the search to fail, so avoid passing full song recordings directly — split audio into phrase-level segments before use.
+
+**Use `--nmix 1` (default)**
+Increasing the GMM mixture count adds expressiveness, but tends to overfit when the training corpus is small. For typical singing voice corpora, the default of `--nmix 1` gives stable results.
+
+**Use `--cap_relax_iter` to constrain early training**
+Right after HMM pre-training, the acoustic model is still rough and tends to misalign long sustained notes or long pauses. Setting `--cap_relax_iter 5` restricts the search range in early iterations for stable convergence, then releases the constraint in later iterations for refinement. This is recommended for most corpora and is included in the recommended settings above.
+
+**Overfitting is fast — data quality matters more than iteration count**
+Even as training log-likelihood continues to improve, test log-likelihood typically plateaus within a few iterations. Running more iterations yields diminishing returns; providing a **corpus with consistent, high-quality labels** has a much greater impact on alignment accuracy. When mixing data from multiple annotators, ensure that phoneme boundary conventions are aligned.
 
 ## Label Formats
 
@@ -212,14 +240,26 @@ The bundled `pyshiro/data/kana2phonemes.table` is based on the `kana2phonemes_et
 
 Pre-trained Japanese models are included as a git submodule from [intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese), trained on 17.8 hours of male and female Japanese singing voice.
 
+### Training Data Credits (Custom Model)
+
+The separately distributed custom trained model was built using the following singing voice databases. We are deeply grateful to the creators and rights holders of each database.
+
+- **Onikurumi Voice Database** — Onikurumi ([https://onikuru.info](https://onikuru.info))
+- **Ofuton P Voice Database** — DB production: Ofuton P ([https://sites.google.com/view/oftn-utagoedb](https://sites.google.com/view/oftn-utagoedb))
+- **Namine Ritsu** — Canon ([https://www.canon-voice.com](https://www.canon-voice.com))
+- **Tohoku Kiritan Singing Database** — ©SSS ([https://zunko.jp/kiridev/login.php](https://zunko.jp/kiridev/login.php))
+- **No.7 Singing Database** — ©No.7製作委員会 ([https://voiceseven.com/7dev/login.php](https://voiceseven.com/7dev/login.php))
+- **Natsume Yuri Voice Database** — DB production: Amanokei, voice provider: Kirino Sota ([https://ksdcm1ng.wixsite.com/njksofficial](https://ksdcm1ng.wixsite.com/njksofficial))
+
 ## Requirements
 
 - Python 3.10+
 - numpy, scipy, soundfile, numba, msgpack
 
-## TODO
+## Changelog
 
-- [ ] **`br` (breath) model**: Bundle a model trained with `br` phoneme labels
+- **2025-03** — Added annotation workflow (`workflow/`). A notebook guides users through resampling, segmentation, automatic alignment, and merging.
+- **2025-03** — Added custom pre-trained model (`checkpoint/pyshiro-jp-v1.hsmm`). Further trained on top of the 17.8h base with additional voice databases. Supports `br` (breath) phoneme.
 
 ## Acknowledgements
 

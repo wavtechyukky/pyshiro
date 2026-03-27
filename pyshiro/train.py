@@ -544,7 +544,7 @@ def _eval_one_file(args):
     ProcessPoolExecutor ワーカー。
     1 ファイルを HSMM アライメントして (loglik, n_frames) を返す。
     """
-    wav_path_str, lab_path_str, phonemap, model = args
+    wav_path_str, lab_path_str, phonemap, model, hmm_cap = args
     from pyshiro.features import extract_mfcc_from_file
     from pyshiro.align import build_state_sequence, forced_align_2pass
 
@@ -556,7 +556,7 @@ def _eval_one_file(args):
     intervals = read_lab(lab_path)
     phonemes  = [ph for _, _, ph in intervals]
     state_seq = build_state_sequence(phonemes, phonemap, T)
-    _, loglik = forced_align_2pass(model, streams_feat, state_seq)
+    _, loglik = forced_align_2pass(model, streams_feat, state_seq, hmm_cap=hmm_cap)
     return loglik, T
 
 
@@ -566,6 +566,7 @@ def compute_test_ll(
     phonemap: dict,
     model: HSMMModel,
     n_jobs: int = 1,
+    hmm_cap: int = None,
 ) -> float:
     """
     テストデータの HSMM 対数尤度（nats/frame）を返す。
@@ -575,7 +576,7 @@ def compute_test_ll(
     for wav_path in sorted(test_wav_dir.glob("*.wav")):
         lab_path = test_lab_dir / (wav_path.stem + ".lab")
         if lab_path.exists():
-            args_list.append((str(wav_path), str(lab_path), phonemap, model))
+            args_list.append((str(wav_path), str(lab_path), phonemap, model, hmm_cap))
 
     if not args_list:
         print("  テストデータなし", flush=True)
@@ -862,14 +863,14 @@ def train(
         test_ll = float("nan")
         if test_wav_dir is not None and test_lab_dir is not None:
             test_ll = compute_test_ll(test_wav_dir, test_lab_dir, phonemap, model,
-                                      n_jobs=n_jobs)
+                                      n_jobs=n_jobs, hmm_cap=hmm_cap)
             print(f"  テスト対数尤度: {test_ll:.4f} nats/frame", flush=True)
 
         # ログファイルに記録
         log_file.write(f"{it + 1}\t{ll_per_frame:.6f}\t{test_ll:.6f}\n")
 
         # イテレーションごとにチェックポイントを保存
-        ckpt = out_path.with_suffix(f".iter{it + 1}.hsmm")
+        ckpt = out_path.with_suffix(f".iter{it + 1:03d}.hsmm")
         save_hsmm(model, ckpt)
 
     log_file.close()

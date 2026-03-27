@@ -45,12 +45,12 @@ import pyshiro
 model    = pyshiro.load_hsmm("models/intunist-jp6_generic.hsmm")
 phonemap = pyshiro.load_phonemap("models/intunist-jp6_phonemap.json")
 
-# 特徴量を抽出
-streams  = pyshiro.extract_mfcc_from_file("audio.wav")
+# 特徴量を抽出（16kHz モノラル WAV）
+streams  = pyshiro.extract_mfcc_from_file("example/wav_16k/akai_kutsu.wav")
 
 # 歌詞を音素列に変換
 table    = pyshiro.load_table()   # 同梱の kana2phonemes テーブルを使用
-phonemes = pyshiro.convert_lyric_file("lyrics.txt", table)
+phonemes = pyshiro.convert_lyric_file("example/lyrics/akai_kutsu.txt", table)
 
 # アライメント
 T         = streams[0].shape[0]
@@ -60,8 +60,12 @@ segments  = pyshiro.forced_align_2pass(model, streams, state_seq)
 # .lab ファイルに書き出す
 from pyshiro.labels import segments_to_phoneme_intervals, write_lab
 intervals = segments_to_phoneme_intervals(phonemes, segments)
-write_lab(intervals, "output.lab")
+write_lab(intervals, "example/labels/akai_kutsu.lab")
 ```
+
+## アノテーションガイド
+
+実際にアノテーションに活用したい方に向けて、訓練済みモデルを使って WAV コーパスの `.lab` を完成させるまでのワークフローを **[workflow/annotation_guide.ipynb](workflow/annotation_guide.ipynb)** で解説しています。音声の変換・分割・自動アライメント・手動修正・結合まで、一連の手順をノートブック上でガイドします。
 
 ## 歌詞ファイルのフォーマット
 
@@ -112,7 +116,7 @@ pyshiro-train \
   --lab_dir  corpus/lab \
   --phonemap models/intunist-jp6_phonemap.json \
   --out      my_model.hsmm \
-  --iters    20 \
+  --iters    10 \
   --jobs     8   # 並列ワーカー数（デフォルト: CPU コア数）
 
 # 訓練（HMM プレトレーニング + DAEM + GMM 成分数増加）
@@ -121,32 +125,33 @@ pyshiro-train \
   --lab_dir   corpus/lab \
   --phonemap  models/intunist-jp6_phonemap.json \
   --out       my_model.hsmm \
-  --iters     20 \
-  --hmm_iters 3 \
+  --iters     10 \
+  --hmm_iters 2 \
   --daem \
   --nmix      4
 
 # 途中から再開
-# イテレーション完了ごとに my_model.iter1.hsmm, my_model.iter2.hsmm ... が自動保存される
+# イテレーション完了ごとに my_model.iter001.hsmm, my_model.iter002.hsmm ... が自動保存される
 pyshiro-train \
   --wav_dir    corpus/wav \
   --lab_dir    corpus/lab \
   --phonemap   models/intunist-jp6_phonemap.json \
   --out        my_model.hsmm \
-  --iters      20 \
-  --init_model my_model.iter10.hsmm \
-  --start_iter 10
+  --iters      10 \
+  --init_model my_model.iter005.hsmm \
+  --start_iter 5
 
 # cap_relax_iter: 訓練初期は探索範囲を制限し、後半で解除する
 # ロングトーンや長い pau を含むコーパスで収束が不安定な場合に有効
+# ↓ おすすめ設定
 pyshiro-train \
   --wav_dir        corpus/wav \
   --lab_dir        corpus/lab \
   --phonemap       models/intunist-jp6_phonemap.json \
   --out            my_model.hsmm \
-  --iters          20 \
+  --iters          10 \
   --hmm_iters      2 \
-  --cap_relax_iter 10
+  --cap_relax_iter 5
 
 # トライフォン化
 python -m pyshiro.untie \
@@ -155,7 +160,31 @@ python -m pyshiro.untie \
   --lab_dir      corpus/lab \
   --out_phonemap my_tri_phonemap.json \
   --out_model    my_tri_model.hsmm
+
+# アライメント結果の可視化（波形・メルスペクトログラム・GT・推定ラベルを PNG 出力）
+python tests/plot_alignment.py \
+  --wav_dir  corpus/wav \
+  --lab_dir  corpus/lab \
+  --model    my_model.hsmm \
+  --phonemap my_phonemap.json \
+  --out_dir  plots
 ```
+
+## 訓練のヒント
+
+実際の使用から得られた知見をまとめます。
+
+**入力音声は短く細切れにする**
+1ファイルあたり20秒以下を目安にすると安定して動作しやすい。長い pau（無音区間）が含まれると探索が破綻しやすいため、曲全体をそのまま渡すのは避け、フレーズ単位に分割してから使用することを推奨する。
+
+**`--nmix` は 1 を推奨**
+GMM の混合数を増やすと表現力は上がりますが、学習データが少ない場合はパラメータ過多になりやすい。歌声コーパス程度の規模では `--nmix 1`（デフォルト）が安定して良い結果を出す。
+
+**`--cap_relax_iter` で序盤の探索範囲を制限する**
+HMM プレトレーニング直後は音響モデルが粗く、ロングトーンや長い pau に誤って大量フレームを割り当ててしまいやすい。`--cap_relax_iter 5` を指定すると序盤の探索範囲を制限しながら安定的に収束させ、後半で制限を外して精細化できる。ほとんどのコーパスで有効なため、上記のおすすめ設定に含めている。
+
+**過学習が早い：イテレーション数より教師データの質が重要**
+train の対数尤度が改善し続けていても、テストデータの対数尤度は数イテレーションで頭打ちになることが多い。学習を長く回すより、**ラベリングの一貫性が高いコーパスを用意すること**の方がアライメント精度への寄与が大きい。異なるラベラーのデータを混在させる場合は、音素境界の基準が揃っているかを確認することを推奨する。
 
 ## ラベル出力
 
@@ -211,14 +240,26 @@ phonemap の音素エントリに `"pskip"` を指定すると、その音素が
 
 [intunist/SHIRO-Models-Japanese](https://github.com/intunist/SHIRO-Models-Japanese) を git submodule として同梱しています。男女を含む日本語17.8時間の歌唱音声のデータセットで訓練されたモデルです。
 
+### カスタムモデルの学習データ謝辞
+
+別途配布するカスタム訓練済みモデルは、以下の歌声データベースを使用して訓練されています。各データベースの制作者・権利者に深く感謝申し上げます。
+
+- **御丹宮くるみ歌声データベース** — 御丹宮くるみ（[https://onikuru.info](https://onikuru.info)）
+- **おふとんP歌声データベース** — DB制作：おふとんP（[https://sites.google.com/view/oftn-utagoedb](https://sites.google.com/view/oftn-utagoedb)）
+- **波音リツ** — カノン（[https://www.canon-voice.com](https://www.canon-voice.com)）
+- **東北きりたん歌唱データベース** — ©SSS（[https://zunko.jp/kiridev/login.php](https://zunko.jp/kiridev/login.php)）
+- **No.7 歌唱データベース** — ©No.7製作委員会（[https://voiceseven.com/7dev/login.php](https://voiceseven.com/7dev/login.php)）
+- **夏目悠李歌声データベース** — 歌声DB制作：アマノケイ、音声提供者：霧野蒼太（[https://ksdcm1ng.wixsite.com/njksofficial](https://ksdcm1ng.wixsite.com/njksofficial)）
+
 ## 動作環境
 
 - Python 3.10 以上
 - numpy, scipy, soundfile, numba, msgpack
 
-## TODO
+## 更新履歴
 
-- [ ] **`br`（吐息）音素対応モデルの訓練・同梱**: 訓練データに br ラベルを含めた専用モデル
+- **2025-03** — アノテーションワークフロー（`workflow/`）を追加。音声の変換・分割・自動アライメント・結合までをノートブックでガイド。
+- **2025-03** — 独自訓練済みモデル（`checkpoint/pyshiro-jp-v1.hsmm`）を追加。17.8時間に加え、複数歌声データベースで追加訓練。`br`（吐息）音素に対応。
 
 ## 謝辞
 

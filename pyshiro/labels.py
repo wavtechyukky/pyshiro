@@ -38,19 +38,25 @@ def segments_to_phoneme_intervals(
 
 
 # ---------------------------------------------------------------------------
-# ENUNU .lab 形式 (HTK: 100ns 単位)
+# ENUNU .lab 形式 (秒単位)
 # ---------------------------------------------------------------------------
 
 def write_lab(intervals: List[Tuple[int, int, str]],
-              out_path: Path) -> None:
+              out_path: Path,
+              htk: bool = False) -> None:
     """
-    ENUNU/HTK 形式の .lab ファイルを書き出す。
-    時刻単位: 100ナノ秒 (1秒 = 10,000,000)
+    ENUNU .lab ファイルを書き出す。
+
+    htk=False（デフォルト）: 秒単位（小数点以下7桁）
+    htk=True              : HTK 100ns 整数単位（1秒 = 10,000,000）
     """
     ns_per_frame = int(HOP_SIZE * 1e7 / SAMPLE_RATE)  # 500_000
     lines = []
     for start, end, ph in intervals:
-        lines.append(f"{start * ns_per_frame} {end * ns_per_frame} {ph}")
+        if htk:
+            lines.append(f"{start * ns_per_frame} {end * ns_per_frame} {ph}")
+        else:
+            lines.append(f"{start * HOP_TIME:.7f} {end * HOP_TIME:.7f} {ph}")
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

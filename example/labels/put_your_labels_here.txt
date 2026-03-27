@@ -1,0 +1,2 @@
+Alignment label files (.lab / .TextGrid) will be placed here by workflow/02_align.py.
+After manual correction, run workflow/03_merge.py to merge them back into a full-song label.

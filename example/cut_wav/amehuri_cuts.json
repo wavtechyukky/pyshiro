@@ -1,0 +1,32 @@
+[
+  {
+    "name": "amehuri_s001",
+    "source_wav": "amehuri.wav",
+    "start_sample": 25920,
+    "end_sample": 251520,
+    "source_total_samples": 995715,
+    "sample_rate": 16000,
+    "start_sec": 1.62,
+    "end_sec": 15.72
+  },
+  {
+    "name": "amehuri_s002",
+    "source_wav": "amehuri.wav",
+    "start_sample": 283840,
+    "end_sample": 509120,
+    "source_total_samples": 995715,
+    "sample_rate": 16000,
+    "start_sec": 17.74,
+    "end_sec": 31.82
+  },
+  {
+    "name": "amehuri_s003",
+    "source_wav": "amehuri.wav",
+    "start_sample": 543680,
+    "end_sample": 768000,
+    "source_total_samples": 995715,
+    "sample_rate": 16000,
+    "start_sec": 33.98,
+    "end_sec": 48.0
+  }
+]

@@ -11,9 +11,19 @@ venv/
 *.hsmm
 !models/**/*.hsmm
 !ckpt/pyshiro-jp.hsmm
+!checkpoint/*.hsmm
 *.npz
 ckpt/
 !ckpt/pyshiro-jp.hsmm
 debug/
 /data/
 HANDOFF.md
+test_plots/
+
+# example フォルダ内の WAV（コーパス再配布防止）
+example/raw_wav/*.wav
+example/wav_16k/*.wav
+example/cut_wav/*.wav
+
+# example 内の作業用フォルダ（念の為残すがコミットしない）
+example/kiritan_01/
