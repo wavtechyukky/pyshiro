@@ -259,7 +259,7 @@ The separately distributed custom trained model was built using the following si
 ## Changelog
 
 - **2025-03** — Added annotation workflow (`workflow/`). A notebook guides users through resampling, segmentation, automatic alignment, and merging.
-- **2025-03** — Added custom pre-trained model (`checkpoint/pyshiro-jp-v1.hsmm`). Further trained on top of intunist's 17.8h base with an additional 19.4h across multiple voice databases. Supports `br` (breath) phoneme.
+- **2025-03** — Added custom pre-trained model (`checkpoint/pyshiro-jp-v1.hsmm`). Trained from scratch on 19.4h across multiple voice databases. Supports `br` (breath) phoneme.
 
 ## Acknowledgements
 
