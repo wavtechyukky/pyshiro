@@ -144,9 +144,12 @@ pyshiro-train \
 
 # cap_relax_iter: constrain the search range in early training, release it later
 # Useful for corpora with long sustained notes or long pauses
+# Specifying test_wav_dir / test_lab_dir logs test log-likelihood at each iteration
 pyshiro-train \
   --wav_dir        corpus/wav \
   --lab_dir        corpus/lab \
+  --test_wav_dir   corpus/test/wav \
+  --test_lab_dir   corpus/test/lab \
   --phonemap       models/intunist-jp6_phonemap.json \
   --out            my_model.hsmm \
   --iters          10 \

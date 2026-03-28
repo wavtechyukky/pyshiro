@@ -143,10 +143,13 @@ pyshiro-train \
 
 # cap_relax_iter: 訓練初期は探索範囲を制限し、後半で解除する
 # ロングトーンや長い pau を含むコーパスで収束が不安定な場合に有効
+# test_wav_dir / test_lab_dir を指定するとイテレーションごとにテスト対数尤度を記録する
 # ↓ おすすめ設定
 pyshiro-train \
   --wav_dir        corpus/wav \
   --lab_dir        corpus/lab \
+  --test_wav_dir   corpus/test/wav \
+  --test_lab_dir   corpus/test/lab \
   --phonemap       models/intunist-jp6_phonemap.json \
   --out            my_model.hsmm \
   --iters          10 \
