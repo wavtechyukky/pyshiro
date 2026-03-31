@@ -43,18 +43,23 @@ VAR_FLOOR_RATIO = 0.01   # 全体分散の 1%
 
 
 # ---------------------------------------------------------------------------
-# .lab 読み込み
+# ラベル読み込み
 # ---------------------------------------------------------------------------
 
-def read_lab(path: Path) -> List[Tuple[float, float, str]]:
-    """ENUNU .lab → [(start_sec, end_sec, phoneme), ...]"""
-    ivs = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split()
-        if len(parts) < 3:
-            continue
-        ivs.append((float(parts[0]), float(parts[1]), parts[2]))
-    return ivs
+from pyshiro.labels import read_lab, read_textgrid, read_audacity
+
+_LABEL_EXTS = [(".lab", read_lab), (".TextGrid", read_textgrid), (".txt", read_audacity)]
+
+
+def _find_label(lab_dir: Path, stem: str):
+    """stem に対応するラベルファイルを .lab / .TextGrid / .txt の順に探す。
+    Returns (path, reader) or (None, None)。
+    """
+    for ext, reader in _LABEL_EXTS:
+        p = lab_dir / (stem + ext)
+        if p.exists():
+            return p, reader
+    return None, None
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +128,8 @@ def _collect_one_file(args):
     streams_feat = extract_mfcc_from_file(wav_path)
     T = streams_feat[0].shape[0]
 
-    intervals = read_lab(lab_path)
+    _, reader = _find_label(lab_path.parent, lab_path.stem)
+    intervals = (reader or read_lab)(lab_path)
 
     suff: Dict = {}   # (stream_idx, out_idx) -> [(count_m, sum_x_m, sum_sq_m), ...]
     durs: Dict = {}   # dur_idx -> [frame_counts]
@@ -464,8 +470,8 @@ def collect_stats(
     args_list = []
     n_no_lab = 0
     for wav_path in sorted(wav_files):
-        lab_path = lab_dir / (wav_path.stem + ".lab")
-        if not lab_path.exists():
+        lab_path, reader = _find_label(lab_dir, wav_path.stem)
+        if lab_path is None:
             n_no_lab += 1
             continue
         args_list.append((str(wav_path), str(lab_path), phonemap,
@@ -553,7 +559,8 @@ def _eval_one_file(args):
 
     streams_feat = extract_mfcc_from_file(wav_path)
     T = streams_feat[0].shape[0]
-    intervals = read_lab(lab_path)
+    _, reader = _find_label(lab_path.parent, lab_path.stem)
+    intervals = (reader or read_lab)(lab_path)
     phonemes  = [ph for _, _, ph in intervals]
     state_seq = build_state_sequence(phonemes, phonemap, T)
     _, loglik = forced_align_2pass(model, streams_feat, state_seq, hmm_cap=hmm_cap)
@@ -574,8 +581,8 @@ def compute_test_ll(
     """
     args_list = []
     for wav_path in sorted(test_wav_dir.glob("*.wav")):
-        lab_path = test_lab_dir / (wav_path.stem + ".lab")
-        if lab_path.exists():
+        lab_path, _ = _find_label(test_lab_dir, wav_path.stem)
+        if lab_path is not None:
             args_list.append((str(wav_path), str(lab_path), phonemap, model, hmm_cap))
 
     if not args_list:

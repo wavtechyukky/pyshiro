@@ -24,8 +24,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
 def _align_one(wav_path: Path, lyrics_path: Path, model_path: Path,
-               phonemap_path: Path, out_path: Path, fmt: str,
-               htk: bool = False) -> str:
+               phonemap_path: Path, out_path: Path, fmt: str) -> str:
     """1 セグメントをアライメントしてラベルを書き出す（サブプロセス用）。"""
     import pyshiro
     from pyshiro.labels import (segments_to_phoneme_intervals,
@@ -56,7 +55,7 @@ def _align_one(wav_path: Path, lyrics_path: Path, model_path: Path,
     elif fmt == "audacity":
         write_audacity(intervals, out_path)
     else:
-        write_lab(intervals, out_path, htk=htk)
+        write_lab(intervals, out_path)
 
     return f"  saved: {out_path.name}"
 
@@ -74,8 +73,6 @@ def main():
     parser.add_argument("--format",     choices=["lab", "textgrid", "audacity"],
                         default="lab")
     parser.add_argument("--overwrite",  action="store_true")
-    parser.add_argument("--htk",        action="store_true",
-                        help="lab 出力を HTK 100ns 整数形式にする（デフォルト: 秒単位）")
     parser.add_argument("--jobs",       type=int,
                         default=os.cpu_count() or 1)
     args = parser.parse_args()
@@ -110,7 +107,7 @@ def main():
             try:
                 msg = _align_one(wav_path, lyrics_path,
                                  args.model, args.phonemap,
-                                 out_path, args.format, args.htk)
+                                 out_path, args.format)
                 print(msg, flush=True)
             except Exception as e:
                 import traceback
@@ -121,7 +118,7 @@ def main():
             futures = {
                 pool.submit(_align_one, wav_path, lyrics_path,
                             args.model, args.phonemap,
-                            out_path, args.format, args.htk): wav_path.stem
+                            out_path, args.format): wav_path.stem
                 for wav_path, lyrics_path, out_path in tasks
             }
             for future in as_completed(futures):

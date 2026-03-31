@@ -156,11 +156,53 @@ def _build_segments(
 # ---------------------------------------------------------------------------
 
 def _read_lab(path: Path) -> List[Tuple[float, float, str]]:
+    """HTK (.lab)、秒単位 .lab、TextGrid、Audacity (.txt) を自動判定して読む。
+    返り値は常に秒単位の (start, end, phoneme) リスト。
+    """
+    import re as _re
+
+    text = path.read_text(encoding="utf-8")
+
+    # --- Praat TextGrid ---
+    if 'File type = "ooTextFile"' in text or path.suffix.lower() == ".textgrid":
+        xmin_vals = _re.findall(r'xmin\s*=\s*([0-9.e+\-]+)', text)
+        xmax_vals = _re.findall(r'xmax\s*=\s*([0-9.e+\-]+)', text)
+        text_vals = _re.findall(r'text\s*=\s*"([^"]*)"', text)
+        n = len(text_vals)
+        intervals = []
+        for i in range(n):
+            s = float(xmin_vals[2 + i])
+            e = float(xmax_vals[2 + i])
+            intervals.append((s, e, text_vals[i]))
+        return intervals
+
     intervals = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        parts = line.strip().split()
-        if len(parts) >= 3:
-            intervals.append((float(parts[0]), float(parts[1]), parts[2]))
+
+    # --- Audacity: TAB 区切り ---
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if lines and "\t" in lines[0]:
+        for line in lines:
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                s, e = float(parts[0]), float(parts[1])
+                ph = parts[2] if len(parts) >= 3 else ""
+                intervals.append((s, e, ph))
+        return intervals
+
+    # --- HTK / 秒単位 .lab: スペース区切り ---
+    # 先頭が 0 の場合は 2列目の終了時刻で判定
+    first_parts = lines[0].split() if lines else []
+    first_val = float(first_parts[1]) if len(first_parts) >= 2 else 0.0
+    is_htk = first_val > 1000.0
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        s, e = float(parts[0]), float(parts[1])
+        if is_htk:
+            s *= 1e-7
+            e *= 1e-7
+        intervals.append((s, e, parts[2]))
     return intervals
 
 
@@ -360,8 +402,14 @@ def main():
     print(f"{len(wav_files)} ファイルを処理中...", flush=True)
 
     for wav_path in wav_files:
-        lab_path = args.lab_dir / (wav_path.stem + ".lab")
-        if not lab_path.exists():
+        # .lab / .TextGrid / .txt を順に探す
+        lab_path = None
+        for ext in (".lab", ".TextGrid", ".txt"):
+            candidate = args.lab_dir / (wav_path.stem + ext)
+            if candidate.exists():
+                lab_path = candidate
+                break
+        if lab_path is None:
             print(f"  [SKIP] lab なし: {wav_path.name}", flush=True)
             continue
 

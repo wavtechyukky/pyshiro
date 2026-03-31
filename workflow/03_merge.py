@@ -47,8 +47,9 @@ def _read_lab_htk(path: Path) -> List[Tuple[int, int, str]]:
     if not lines:
         return []
 
-    # 先頭行の値で単位を判定
-    first_val = float(lines[0].split()[0])
+    # 先頭行の終了値で単位を判定（開始が 0 のケースに対応）
+    first_parts = lines[0].split()
+    first_val = float(first_parts[1]) if len(first_parts) >= 2 else 0.0
     is_htk = first_val > 1000.0
 
     result = []
@@ -104,6 +105,42 @@ def _read_audacity_htk(path: Path) -> List[Tuple[int, int, str]]:
 
 
 # ---------------------------------------------------------------------------
+# 出力ヘルパー
+# ---------------------------------------------------------------------------
+
+def _write_textgrid_htk(intervals: List[Tuple[int, int, str]], out_path: Path,
+                        tier_name: str = "phoneme") -> None:
+    """HTK 整数区間リストを Praat TextGrid として書き出す。"""
+    xmin = f"{intervals[0][0] * 1e-7:.4f}"
+    xmax = f"{intervals[-1][1] * 1e-7:.4f}"
+    n = len(intervals)
+    lines = [
+        'File type = "ooTextFile"',
+        'Object class = "TextGrid"',
+        "",
+        f"xmin = {xmin}",
+        f"xmax = {xmax}",
+        "tiers? <exists>",
+        "size = 1",
+        "item []:",
+        "    item [1]:",
+        '        class = "IntervalTier"',
+        f'        name = "{tier_name}"',
+        f"        xmin = {xmin}",
+        f"        xmax = {xmax}",
+        f"        intervals: size = {n}",
+    ]
+    for i, (s, e, ph) in enumerate(intervals, 1):
+        lines += [
+            f"        intervals [{i}]:",
+            f"            xmin = {s * 1e-7:.4f}",
+            f"            xmax = {e * 1e-7:.4f}",
+            f'            text = "{ph}"',
+        ]
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -116,10 +153,14 @@ def main():
                         help="{stem}_cuts.json")
     parser.add_argument("--lab_dir",  type=Path, required=True,
                         help="手修正済みラベルのディレクトリ")
-    parser.add_argument("--out",      type=Path, required=True,
-                        help="出力 HTK .lab パス")
-    parser.add_argument("--format",   choices=["lab", "textgrid", "audacity"],
-                        default="lab")
+    parser.add_argument("--out",        type=Path, required=True,
+                        help="出力ファイルパス")
+    parser.add_argument("--format",     choices=["lab", "textgrid", "audacity"],
+                        default="lab",
+                        help="入力ラベルの形式")
+    parser.add_argument("--out_format", choices=["lab", "textgrid", "audacity"],
+                        default=None,
+                        help="出力形式（省略時は --format と同じ。lab=HTK 100ns）")
     parser.add_argument("--no_fill_pau", action="store_true",
                         help="セグメント間の隙間を pau で埋めない")
     args = parser.parse_args()
@@ -203,11 +244,20 @@ def main():
                 merged.append((merged[-1][1], source_end_htk, "pau"))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    # ENUNU .lab 形式（秒単位、小数点以下7桁）で出力
-    lines = [f"{s * 1e-7:.7f} {e * 1e-7:.7f} {ph}" for s, e, ph in merged]
-    args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out_fmt = args.out_format or args.format
     total_sec = merged[-1][1] * 1e-7
-    print(f"\n{len(merged)} intervals, 総時間 {total_sec:.2f}s → {args.out}")
+
+    if out_fmt == "textgrid":
+        _write_textgrid_htk(merged, args.out)
+    elif out_fmt == "audacity":
+        lines = [f"{s * 1e-7:.7f}\t{e * 1e-7:.7f}\t{ph}" for s, e, ph in merged]
+        args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    else:
+        # HTK/ENUNU 標準形式（100ns 整数）
+        lines = [f"{s} {e} {ph}" for s, e, ph in merged]
+        args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    print(f"\n{len(merged)} intervals, 総時間 {total_sec:.2f}s → {args.out} ({out_fmt})")
 
 
 if __name__ == "__main__":

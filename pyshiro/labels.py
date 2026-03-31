@@ -2,8 +2,10 @@
 labels.py
 
 アライメント結果 → ENUNU .lab / Praat TextGrid 出力
+ラベル読み込み → .lab (HTK / 秒自動判定)、Praat TextGrid、Audacity
 """
 
+import re
 from pathlib import Path
 from typing import List, Tuple
 
@@ -38,25 +40,19 @@ def segments_to_phoneme_intervals(
 
 
 # ---------------------------------------------------------------------------
-# ENUNU .lab 形式 (秒単位)
+# ENUNU .lab 形式 (HTK: 100ns 単位)
 # ---------------------------------------------------------------------------
 
 def write_lab(intervals: List[Tuple[int, int, str]],
-              out_path: Path,
-              htk: bool = False) -> None:
+              out_path: Path) -> None:
     """
-    ENUNU .lab ファイルを書き出す。
-
-    htk=False（デフォルト）: 秒単位（小数点以下7桁）
-    htk=True              : HTK 100ns 整数単位（1秒 = 10,000,000）
+    HTK/ENUNU 標準形式の .lab ファイルを書き出す。
+    時刻単位: 100ナノ秒整数 (1秒 = 10,000,000)
+    NNSVS / ENUNU / Sinsy / vLabeler に直接渡せる形式。
     """
     ns_per_frame = int(HOP_SIZE * 1e7 / SAMPLE_RATE)  # 500_000
-    lines = []
-    for start, end, ph in intervals:
-        if htk:
-            lines.append(f"{start * ns_per_frame} {end * ns_per_frame} {ph}")
-        else:
-            lines.append(f"{start * HOP_TIME:.7f} {end * HOP_TIME:.7f} {ph}")
+    lines = [f"{s * ns_per_frame} {e * ns_per_frame} {ph}"
+             for s, e, ph in intervals]
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -119,6 +115,72 @@ def write_audacity(intervals: List[Tuple[int, int, str]],
         e = round(end   * HOP_TIME, _PREC)
         lines.append(f"{s}\t{e}\t{ph}")
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def read_textgrid(path: Path,
+                  tier: int = 0) -> List[Tuple[float, float, str]]:
+    """
+    Praat TextGrid (.TextGrid) の IntervalTier を読み込む。
+
+    Parameters
+    ----------
+    path : Path
+        TextGrid ファイルパス。
+    tier : int
+        読み込む IntervalTier のインデックス（0 始まり）。複数 tier がある場合に使用。
+
+    Returns
+    -------
+    list of (start_sec, end_sec, label)
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        text = path.read_text(encoding="utf-16")
+    xmin_vals = re.findall(r'xmin\s*=\s*([0-9.e+\-]+)', text)
+    xmax_vals = re.findall(r'xmax\s*=\s*([0-9.e+\-]+)', text)
+    text_vals = re.findall(r'text\s*=\s*"([^"]*)"', text)
+
+    # tier ヘッダ数（file xmin/xmax + 各 tier xmin/xmax）を飛ばして interval を取得
+    # tier ごとに xmin/xmax が 1 ペアずつ先頭にある
+    n = len(text_vals)
+    offset = 2 + tier  # file(1) + tier headers up to target tier
+    intervals = []
+    for i in range(n):
+        s = float(xmin_vals[offset + i])
+        e = float(xmax_vals[offset + i])
+        intervals.append((s, e, text_vals[i]))
+    return intervals
+
+
+def read_lab(path: Path) -> List[Tuple[float, float, str]]:
+    """
+    HTK .lab または秒単位 .lab を読み込む。
+
+    先頭行の終了値が 1000 より大きければ HTK 100ns 整数とみなして秒に変換する。
+
+    Returns
+    -------
+    list of (start_sec, end_sec, label)
+    """
+    lines = [l.strip() for l in path.read_text(encoding="utf-8").splitlines()
+             if l.strip()]
+    if not lines:
+        return []
+    first_parts = lines[0].split()
+    first_end = float(first_parts[1]) if len(first_parts) >= 2 else 0.0
+    is_htk = first_end > 1000.0
+    intervals = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        s, e = float(parts[0]), float(parts[1])
+        if is_htk:
+            s *= 1e-7
+            e *= 1e-7
+        intervals.append((s, e, parts[2]))
+    return intervals
 
 
 def read_audacity(path: Path) -> List[Tuple[float, float, str]]:

@@ -578,8 +578,6 @@ def main():
                         help="出力 .lab ファイル（省略時は WAV と同名）")
     parser.add_argument("--format",   choices=["lab", "textgrid", "audacity"],
                         default="lab", help="出力形式（デフォルト: lab）")
-    parser.add_argument("--htk",      action="store_true",
-                        help="lab 出力を HTK 100ns 整数形式にする（デフォルト: 秒単位）")
     args = parser.parse_args()
 
     out_path = args.out or args.wav.with_suffix(
@@ -608,7 +606,7 @@ def main():
     intervals = segments_to_phoneme_intervals(phonemes, segments)
 
     if args.format == "lab":
-        write_lab(intervals, out_path, htk=args.htk)
+        write_lab(intervals, out_path)
     elif args.format == "textgrid":
         from pyshiro.labels import write_textgrid
         write_textgrid(intervals, out_path)

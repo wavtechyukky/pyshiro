@@ -22,8 +22,8 @@ This project is a near-complete Python port of the original [SHIRO](https://gith
 - **Triphone expansion** (`pyshiro.untie`): Expand a monophone model into context-dependent triphones (equivalent to `shiro-untie`)
 
 **I/O**
-- **Label output**: `.lab` (ENUNU compatible), Praat TextGrid, Audacity labels
-- **Label input**: `.lab`, Audacity labels
+- **Label output**: `.lab` (HTK 100ns integer format, compatible with ENUNU / NNSVS / vLabeler), Praat TextGrid, Audacity labels
+- **Label input**: `.lab` (HTK 100ns and seconds format auto-detected), Audacity labels
 - **Kana-to-phoneme**: Japanese hiragana → phoneme sequence (bundled table based on ENUNU's conversion table)
 
 **Lightweight**: Core depends only on `numpy`, `scipy`, `soundfile`, `numba`, `msgpack`
@@ -193,15 +193,18 @@ Even as training log-likelihood continues to improve, test log-likelihood typica
 
 ```python
 from pyshiro.labels import (
-    write_lab, write_textgrid, write_audacity, read_audacity
+    write_lab, write_textgrid, write_audacity,
+    read_lab, read_textgrid, read_audacity,
 )
 
 # Write
-write_lab(intervals, "output.lab")           # .lab (ENUNU compatible)
+write_lab(intervals, "output.lab")           # .lab (HTK 100ns integer format, ENUNU / NNSVS / vLabeler compatible)
 write_textgrid(intervals, "output.TextGrid") # Praat TextGrid
 write_audacity(intervals, "output.txt")      # Audacity labels
 
 # Read back hand-corrected labels
+intervals = read_lab("corrected.lab")        # HTK 100ns and seconds format auto-detected
+intervals = read_textgrid("corrected.TextGrid")
 intervals = read_audacity("corrected.txt")
 ```
 
