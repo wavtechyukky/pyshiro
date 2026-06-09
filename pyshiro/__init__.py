@@ -13,8 +13,11 @@ Provides:
 from pyshiro.model    import load_hsmm, save_hsmm, HSMMModel
 from pyshiro.features import extract_mfcc, extract_mfcc_from_file
 from pyshiro.align    import (load_phonemap, build_state_sequence,
-                               forced_align, forced_align_2pass)
-from pyshiro.labels   import write_lab, write_textgrid
+                               forced_align, forced_align_2pass,
+                               refine_pau_boundaries,
+                               realign_external_labels,
+                               SILENCE_PHONES)
+from pyshiro.labels   import write_lab, write_lab_sec, write_textgrid
 from pyshiro.phonemes import load_table, convert_lyric_file, text_to_phonemes
 
 __version__ = "0.1.0"
@@ -23,6 +26,8 @@ __all__ = [
     "extract_mfcc", "extract_mfcc_from_file",
     "load_phonemap", "build_state_sequence",
     "forced_align", "forced_align_2pass",
-    "write_lab", "write_textgrid",
+    "refine_pau_boundaries", "realign_external_labels",
+    "SILENCE_PHONES",
+    "write_lab", "write_lab_sec", "write_textgrid",
     "load_table", "convert_lyric_file", "text_to_phonemes",
 ]

@@ -10,9 +10,10 @@ phonemap.json で定義された音素→状態マッピングと
 
 import json
 import math
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import numpy as np
 import numba
@@ -554,6 +555,360 @@ def forced_align_2pass(model: HSMMModel, streams: List[np.ndarray],
                                    daem_temp=daem_temp, nodur_phonemes=nodur_phonemes,
                                    hmm_cap=hmm_cap)
     return refined, loglik
+
+
+# ---------------------------------------------------------------------------
+# pau/子音境界エネルギーオンセット補正
+# ---------------------------------------------------------------------------
+
+SOFT_ONSET_PHONES: frozenset = frozenset({
+    # 鼻音・接近音（有声、漸進的オンセット）
+    'n', 'ny', 'm', 'my', 'y', 'w', 'r', 'ry',
+    # 無声摩擦音（エネルギー立ち上がりが緩やか）
+    's', 'sh', 'h', 'hy', 'f',
+})
+
+
+def refine_pau_boundaries(
+    intervals: List[Tuple[int, int, str]],
+    audio: np.ndarray,
+    sr: int,
+    soft_onset_phones: frozenset = SOFT_ONSET_PHONES,
+    search_sec: float = 0.05,
+    rms_hop_sec: float = 0.0025,
+    threshold_ratio: float = 0.15,
+    min_pau_frames: int = 2,
+) -> List[Tuple[int, int, str]]:
+    """
+    pau の直後に来るソフトオンセット子音の pau/子音境界を
+    エネルギーオンセット検出で修正する。
+
+    HSMM アライメントでは pau に隣接する鼻音・摩擦音・接近音の
+    境界が無音区間側にずれやすい。本関数は境界付近の短時間 RMS を
+    走査し、子音区間ピーク RMS の threshold_ratio 倍を超える
+    最初の点を新しい境界として採用する。
+
+    Parameters
+    ----------
+    intervals         : segments_to_phoneme_intervals() の出力
+                        [(start_frame, end_frame, phoneme), ...]  ← フレーム単位
+    audio             : モノラル float32/float64 音声（raw samples）
+    sr                : サンプルレート
+    soft_onset_phones : 補正対象音素セット
+    search_sec        : 境界前方に探索する時間（秒）
+    rms_hop_sec       : RMS 計算のホップ長（秒）
+    threshold_ratio   : オンセット閾値 = 子音ピーク RMS × この値
+    min_pau_frames    : pau の最小長（フレーム数）。これを下回る短縮は行わない
+
+    Returns
+    -------
+    補正済み intervals（フレーム単位、同一フォーマット）
+    """
+    result  = [list(iv) for iv in intervals]
+    rms_hop = max(1, round(rms_hop_sec * sr))
+    n_audio = len(audio)
+
+    def _rms_frames(seg: np.ndarray) -> np.ndarray:
+        n = len(seg) // rms_hop
+        if n == 0:
+            return np.array([])
+        return np.sqrt(np.mean(
+            seg[:n * rms_hop].reshape(n, rms_hop).astype(np.float64) ** 2,
+            axis=1,
+        ))
+
+    for i in range(1, len(result)):
+        ph      = result[i][2]
+        prev_ph = result[i - 1][2]
+
+        if prev_ph != 'pau' or ph not in soft_onset_phones:
+            continue
+
+        f_bound = result[i][0]
+        f_end   = result[i][1]
+
+        s_bound = int(f_bound / FPS * sr)
+        s_hi    = min(n_audio, s_bound + round(search_sec * sr))
+        consnt_seg = audio[s_bound:s_hi]
+        if len(consnt_seg) < rms_hop * 2:
+            continue
+
+        rms_c    = _rms_frames(consnt_seg)
+        if rms_c.size == 0:
+            continue
+        peak_rms = float(rms_c.max())
+        if peak_rms < 1e-7:
+            continue
+
+        threshold = peak_rms * threshold_ratio
+        onset_hop = None
+        for fi, r in enumerate(rms_c):
+            if r >= threshold:
+                onset_hop = fi
+                break
+
+        if onset_hop is None or onset_hop == 0:
+            continue
+
+        s_onset = s_bound + onset_hop * rms_hop
+        f_new   = round(s_onset / sr * FPS)
+        f_new   = min(f_end - min_pau_frames, f_new)
+        f_new   = max(f_bound, f_new)
+
+        if f_new <= f_bound:
+            continue
+
+        result[i - 1][1] = f_new
+        result[i][0]     = f_new
+
+    return [tuple(iv) for iv in result]
+
+
+# ---------------------------------------------------------------------------
+# 外部ラベルの再アライメント
+# ---------------------------------------------------------------------------
+
+_VOWELS = frozenset({'a', 'i', 'u', 'e', 'o', 'N', 'A', 'I', 'U', 'E', 'O'})
+
+SILENCE_PHONES: frozenset = frozenset({'pau', 'sil', 'cl', 'br'})
+
+
+def _phoneme_class(ph: str, silence_phones: frozenset) -> str:
+    """音素を 'silence' / 'vowel' / 'consonant' の3クラスに分類する。"""
+    if ph in silence_phones:
+        return 'silence'
+    if ph in _VOWELS:
+        return 'vowel'
+    return 'consonant'
+
+
+def realign_external_labels(
+    model: HSMMModel,
+    streams: List[np.ndarray],
+    intervals: List[Tuple[float, float, str]],
+    phonemap: dict,
+    anchor_vowel_min_sec: float = 0.5,
+    anchor_pau_min_sec: float = 0.5,
+    anchor_pau_offset_sec: float = 0.25,
+    max_seg_sec: float = 30.0,
+    phoneme_map: Optional[Dict[str, str]] = None,
+    nodur_phonemes: Optional[set] = None,
+    hmm_cap: Optional[int] = None,
+    ignore_transitions: Optional[FrozenSet[Tuple[str, str]]] = None,
+    silence_phones: frozenset = SILENCE_PHONES,
+    unknown_phoneme_map: Optional[Dict[str, str]] = None,
+) -> List[Tuple[int, int, str]]:
+    """
+    外部ラベル（他の基準でアノテーションされた .lab / TextGrid）を
+    このモデルの作風に変換する。
+
+    外部ラベル中の「長い母音」や「長い pau」の時刻が信頼できるアンカーとして
+    使われる。各アンカー間の区間を forced_align_2pass で再アライメントし、
+    子音の閉鎖期・摩擦区間の扱い等をモデルの学習スタイルに揃える。
+
+    Parameters
+    ----------
+    model              : HSMMModel
+    streams            : MFCC 特徴量リスト (T, D)
+    intervals          : 外部ラベルの音素区間リスト [(start_sec, end_sec, phoneme), ...]
+                         read_lab() / read_textgrid() の出力（秒単位）
+    phonemap           : phonemap.json の phone_map dict
+    anchor_vowel_min_sec : この長さ（秒）以上の母音をアンカーに使う（デフォルト 1.0s）
+    anchor_pau_min_sec   : この長さ（秒）以上の pau をアンカーに使う（デフォルト 1.0s）
+    anchor_pau_offset_sec: pau 内のアンカー位置（pau 先頭からの秒数、デフォルト 0.5s）
+    max_seg_sec          : アンカー間がこの秒数を超えたらスキップ（デフォルト 30.0s）
+    phoneme_map          : 外部ラベルの音素名 → pyshiro 音素名の変換テーブル
+                           例: {"q": "cl", "nn": "N"} — None のときは変換なし
+    nodur_phonemes       : 継続時間モデルを無効化する音素集合（例: {"pau", "br", "cl"}）
+    hmm_cap              : HMM 1パス目の状態あたり最大フレーム数
+    ignore_transitions   : この移行タイプの音素境界は元の外部ラベルのまま保持する。
+                           frozenset of (from_class, to_class) タプル。
+                           各クラスは 'silence' / 'vowel' / 'consonant'。
+                           例: frozenset({('consonant','vowel'), ('vowel','vowel')})
+                           None（デフォルト）のとき全境界を更新（現行と同等）。
+                           実装: 指定された境界を追加アンカーとして扱うことで、
+                           そのセグメント境界が固定され境界の逆転も起きない。
+    silence_phones       : 'silence' クラスとして扱う音素セット。
+                           デフォルト: SILENCE_PHONES = {'pau','sil','cl','br'}
+    unknown_phoneme_map  : phonemap に存在しない未知音素の代替マッピング。
+                           アライメント時だけ指定音素に置き換え、出力ラベルは元の音素名を保持。
+                           例: {"vy": "v", "fy": "f", "a'": "a"}
+                           マップに登録されていない未知音素はデフォルトでアンカー扱い
+                           （両端境界を固定し、隣接セグメントへの影響を防ぐ）。
+
+    Returns
+    -------
+    List[Tuple[int, int, str]]
+        フレーム単位の音素区間リスト（write_lab / write_textgrid に渡せる形式）
+
+    Notes
+    -----
+    アンカー範囲外（先頭〜最初のアンカー、最後のアンカー〜末尾）も
+    max_seg_sec 以内なら同様に処理する。超える区間は元の外部ラベルを維持する。
+    """
+    from pyshiro.labels import segments_to_phoneme_intervals
+
+    T = streams[0].shape[0]
+
+    # ── 音素名変換 ────────────────────────────────────────────────────────────
+    def _map_ph(ph: str) -> str:
+        if phoneme_map:
+            return phoneme_map.get(ph, ph)
+        return ph
+
+    # ── 秒 → フレーム変換（外部ラベル） ──────────────────────────────────────
+    intervals_f: List[Tuple[int, int, str]] = [
+        (round(s * FPS), round(e * FPS), ph)
+        for s, e, ph in intervals
+    ]
+
+    # ── アンカー時刻を検出 ────────────────────────────────────────────────────
+    # 各アンカーはセグメント境界となる「時刻（フレーム）」。
+    # 長い母音       : 中心時刻を1点
+    # 長い無音(pau等): 両端から offset の2点（中間の純粋無音域を1音素区間にする）
+    #                  無音クラス（silence_phones: pau / sil / cl / br）を対象とする
+    anchor_frames: List[int] = []
+    offset_f = round(anchor_pau_offset_sec * FPS)
+    for s_f, e_f, ph in intervals_f:
+        dur_sec = (e_f - s_f) / FPS
+        mapped  = _map_ph(ph)
+        if mapped in _VOWELS and dur_sec >= anchor_vowel_min_sec:
+            anchor_frames.append((s_f + e_f) // 2)
+        elif mapped in silence_phones and dur_sec >= anchor_pau_min_sec:
+            a0 = s_f + offset_f
+            a1 = e_f - offset_f
+            anchor_frames.append(a0)
+            if a1 > a0:
+                anchor_frames.append(a1)
+
+    # phonemap に存在しない未知音素の両端をアンカーに追加
+    # （unknown_phoneme_map に登録されていないものに限る）
+    # → 未知音素が孤立したセグメントになり、隣接の既知音素セグメントへの影響を防ぐ
+    _unknown_set: set = set()
+    for s_f, e_f, ph in intervals_f:
+        mapped = _map_ph(ph)
+        if mapped not in phonemap:
+            if unknown_phoneme_map is None or mapped not in unknown_phoneme_map:
+                anchor_frames.append(s_f)
+                anchor_frames.append(e_f)
+                _unknown_set.add(mapped)
+    if _unknown_set:
+        warnings.warn(
+            f"realign_external_labels: unknown phonemes {sorted(_unknown_set)}"
+            f" — treating as anchors (boundaries fixed).",
+            stacklevel=2,
+        )
+
+    # 無視する移行タイプの境界もアンカーとして追加
+    # → その境界が固定のセグメント分割点になり、アライメント結果で変更されない
+    if ignore_transitions:
+        for k in range(len(intervals_f) - 1):
+            ph_k  = _map_ph(intervals_f[k][2])
+            ph_k1 = _map_ph(intervals_f[k + 1][2])
+            # 未知音素（phonemap 未登録）を含む境界は子音扱いにしない
+            # → ignore_transitions のマッチ対象から除外し、別途アンカー処理に委ねる
+            if ph_k not in phonemap or ph_k1 not in phonemap:
+                continue
+            cls_k  = _phoneme_class(ph_k,  silence_phones)
+            cls_k1 = _phoneme_class(ph_k1, silence_phones)
+            if (cls_k, cls_k1) in ignore_transitions:
+                anchor_frames.append(intervals_f[k][1])  # 元ラベルの境界フレーム
+
+    anchor_frames = sorted(set(anchor_frames))
+    seg_bounds = [0] + anchor_frames + [T]
+
+    # ── 結果配列を外部ラベルで初期化 ─────────────────────────────────────────
+    result: List[Tuple[int, int, str]] = list(intervals_f)
+
+    # ── アライメント用音素名変換（未知音素の代替） ────────────────────────────
+    def _align_ph(ph: str) -> str:
+        mapped = _map_ph(ph)
+        if mapped not in phonemap and unknown_phoneme_map:
+            return unknown_phoneme_map.get(mapped, mapped)
+        return mapped
+
+    # ── 1セグメントのアライメントを試みるヘルパー ─────────────────────────────
+    def _try_seg(t_start: int, t_end: int) -> bool:
+        """
+        [t_start, t_end) を再アライメントして result を更新する。
+        成功すれば True、失敗すれば False を返す（result は変更しない）。
+        """
+        if t_end <= t_start:
+            return True
+
+        overlap = [(i, s_f, e_f, ph)
+                   for i, (s_f, e_f, ph) in enumerate(intervals_f)
+                   if s_f < t_end and e_f > t_start]
+        if not overlap:
+            return True
+
+        sub_phonemes  = [_align_ph(ph)  for _, _, _, ph in overlap]
+        orig_phonemes = [_map_ph(ph)    for _, _, _, ph in overlap]
+        sub_streams_  = [s[t_start:t_end] for s in streams]
+        T_sub         = t_end - t_start
+
+        try:
+            state_seq = build_state_sequence(sub_phonemes, phonemap, T_sub)
+            segs, _ = forced_align_2pass(
+                model, sub_streams_, state_seq,
+                nodur_phonemes=nodur_phonemes,
+                hmm_cap=hmm_cap,
+            )
+        except Exception:
+            return False
+
+        new_ivs = segments_to_phoneme_intervals(sub_phonemes, segs)
+
+        for k, (ph_idx, orig_s, orig_e, _) in enumerate(overlap):
+            ns_rel, ne_rel, _ = new_ivs[k]
+            ns  = ns_rel + t_start
+            ne  = ne_rel + t_start
+            nph = orig_phonemes[k]
+
+            sl = orig_s < t_start
+            sr = orig_e > t_end
+            if sl and sr:
+                pass
+            elif sl:
+                result[ph_idx] = (result[ph_idx][0], ne, nph)
+            elif sr:
+                result[ph_idx] = (ns, result[ph_idx][1], nph)
+            else:
+                result[ph_idx] = (ns, ne, nph)
+
+        return True
+
+    # ── セグメントごとに再アライメント ────────────────────────────────────────
+    for ts, te in zip(seg_bounds[:-1], seg_bounds[1:]):
+        # このセグメントに重なる音素のうち、境界がセグメント内側に入るもの
+        # （= 実際に再アライメントで動く可能性のある音素）を数える。
+        # 全音素が両端を跨ぐだけ（典型例: 長い pau の両端アンカー間）なら
+        # 動かす境界が無いので警告せずスキップする。
+        actionable = any(
+            not (s_f < ts and e_f > te)            # 両端跨ぎでない
+            for s_f, e_f, _ in intervals_f
+            if s_f < te and e_f > ts               # セグメントに重なる
+        )
+        if not actionable:
+            continue
+
+        seg_sec = (te - ts) / FPS
+        if seg_sec > max_seg_sec:
+            warnings.warn(
+                f"realign_external_labels: segment [{ts/FPS:.2f}s, {te/FPS:.2f}s]"
+                f" is {seg_sec:.1f}s > max_seg_sec={max_seg_sec}s"
+                f" — keeping original labels for this range.",
+                stacklevel=2,
+            )
+            continue
+        if not _try_seg(ts, te):
+            warnings.warn(
+                f"realign_external_labels: alignment failed for segment"
+                f" [{ts/FPS:.2f}s, {te/FPS:.2f}s] — keeping original labels.",
+                stacklevel=2,
+            )
+
+    return result
 
 
 # ---------------------------------------------------------------------------

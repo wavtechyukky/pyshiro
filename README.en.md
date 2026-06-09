@@ -22,9 +22,15 @@ This project is a near-complete Python port of the original [SHIRO](https://gith
 - **Triphone expansion** (`pyshiro.untie`): Expand a monophone model into context-dependent triphones (equivalent to `shiro-untie`)
 
 **I/O**
-- **Label output**: `.lab` (HTK 100ns integer format, compatible with ENUNU / NNSVS / vLabeler), Praat TextGrid, Audacity labels
-- **Label input**: `.lab` (HTK 100ns and seconds format auto-detected), Audacity labels
+- **Label output**: `.lab` (HTK 100ns integer format, compatible with ENUNU / NNSVS / vLabeler), `.lab` (space-separated seconds), Praat TextGrid, Audacity labels
+- **Label input**: `.lab` (HTK 100ns and seconds format auto-detected), TextGrid, Audacity labels
+- **Flexible writer input**: `write_lab` / `write_textgrid` / `write_audacity` / `write_lab_sec` accept either frame indices (int) or seconds (float)
 - **Kana-to-phoneme**: Japanese hiragana → phoneme sequence (bundled table based on ENUNU's conversion table)
+
+**Label conversion**
+- **Re-labeling external labels**: Convert labels produced by other tools to this model's alignment conventions (`realign_external_labels`)
+- Segments audio using long vowels / pauses as anchors, then re-aligns each segment with the HSMM
+- Choose which phoneme-boundary types to fix with `--fix_transitions` (e.g. only vowel→consonant and silence→consonant)
 
 **Lightweight**: Core depends only on `numpy`, `scipy`, `soundfile`, `numba`, `msgpack`
 
@@ -191,22 +197,77 @@ Even as training log-likelihood continues to improve, test log-likelihood typica
 
 ## Label Formats
 
+Writer functions accept either frame indices (`int`) or seconds (`float`).
+
 ```python
 from pyshiro.labels import (
-    write_lab, write_textgrid, write_audacity,
+    write_lab, write_lab_sec, write_textgrid, write_audacity,
     read_lab, read_textgrid, read_audacity,
 )
 
-# Write
-write_lab(intervals, "output.lab")           # .lab (HTK 100ns integer format, ENUNU / NNSVS / vLabeler compatible)
+# Write (frame indices or seconds both accepted)
+write_lab(intervals, "output.lab")           # HTK 100ns integer (ENUNU / NNSVS / vLabeler compatible)
+write_lab_sec(intervals, "output.lab")       # space-separated seconds (same layout, values in seconds)
 write_textgrid(intervals, "output.TextGrid") # Praat TextGrid
-write_audacity(intervals, "output.txt")      # Audacity labels
+write_audacity(intervals, "output.txt")      # Audacity labels (tab-separated, seconds)
 
 # Read back hand-corrected labels
-intervals = read_lab("corrected.lab")        # HTK 100ns and seconds format auto-detected
+# read_lab auto-detects HTK 100ns integer vs seconds, and returns seconds
+intervals = read_lab("corrected.lab")
 intervals = read_textgrid("corrected.TextGrid")
 intervals = read_audacity("corrected.txt")
 ```
+
+## Label Conversion (re-labeling external labels)
+
+Convert external labels (e.g. from the Tohoku Kiritan singing DB) to this model's
+alignment conventions. See **[workflow/convert_labels.ipynb](workflow/convert_labels.ipynb)** for details.
+
+```bash
+python workflow/04_convert_labels.py \
+    audio.wav  external.lab \
+    --model    models/intunist-jp6_generic.hsmm \
+    --phonemap models/intunist-jp6_phonemap.json \
+    --out      converted.lab \
+    --format   lab_sec
+```
+
+Main options:
+
+| Option | Description |
+|---|---|
+| `--format` | `lab` (HTK 100ns) / `lab_sec` (seconds) / `textgrid` / `audacity` |
+| `--fix_transitions FROM-TO,...` | Comma-separated boundary types to fix (default: fix all). `FROM`/`TO` is `silence` / `vowel` / `consonant`. e.g. `--fix_transitions vowel-consonant,silence-consonant,vowel-silence` |
+| `--anchor_vowel_min` | Min vowel length to use as anchor (sec, default 0.5) |
+| `--anchor_pau_min` | Min pause length to use as anchor (sec, default 0.5) |
+| `--phoneme_map` | Phoneme-name mapping JSON (external → pyshiro) |
+| `--unknown_phoneme_map` | Alignment-time substitution for unknown phonemes (e.g. `vy=v,fy=f`). Output keeps original names |
+
+## Label Outlier Check
+
+Detect consonants whose duration is an outlier within the same phoneme type, and plot
+their waveforms and phoneme labels on a single image. Based on the heuristic that
+**too-short consonants are likely mislabeled**.
+
+```bash
+python workflow/05_check_consonant_outliers.py audio.wav labels.lab \
+    --side short \
+    --out outlier_plots.png
+```
+
+`--side short` (default) and `--side long` are available, but **in practice you almost
+always look at the short side** — the long side mostly reflects normal lengthening
+(consonant closures included) and is a weak signal of mislabeling.
+
+| Option | Default | Description |
+|---|---|---|
+| `--side` | `short` | Outlier side to detect (`short` / `long`) |
+| `--floor_ms` | `40` | [short] Below this length (ms) is flagged unconditionally |
+| `--max_dur_ms` | `50` | [short] Detect below this length AND a statistical outlier |
+| `--iqr_k` | `1.5` | IQR multiplier for normal consonants |
+| `--plosive_iqr_k` | `3.0` | IQR multiplier for plosives/affricates (larger, since closure makes durations bimodal) |
+
+Example output: [example/convert_labels/outlier_plots/](example/convert_labels/outlier_plots/) (short-side plots for the converted Tohoku Kiritan DB).
 
 ## Skippable Phonemes (pskip)
 
@@ -264,6 +325,19 @@ The separately distributed custom trained model was built using the following si
 
 ## Changelog
 
+- **2026-06** — Added label conversion and quality-check tools.
+  - **Label conversion** (`realign_external_labels` / `workflow/04_convert_labels.py`): re-label external labels to this model's conventions. Segments audio using long vowels / pauses as anchors and re-aligns each segment with the HSMM. Choose which boundary types to fix via `--fix_transitions` (e.g. `vowel-consonant,silence-consonant,vowel-silence`). See [workflow/convert_labels.ipynb](workflow/convert_labels.ipynb).
+    ```bash
+    python workflow/04_convert_labels.py audio.wav external.lab \
+        --model M.hsmm --phonemap P.json --out out.lab --format lab_sec \
+        --fix_transitions vowel-consonant,silence-consonant,vowel-silence
+    ```
+  - **Outlier check** (`workflow/05_check_consonant_outliers.py`): detect consonants with outlier durations and plot waveforms + labels on one image. Based on the heuristic that too-short consonants are likely mislabeled; in practice `--side short` (default) is the one to look at.
+    ```bash
+    python workflow/05_check_consonant_outliers.py audio.wav labels.lab \
+        --side short --out outliers.png
+    ```
+  - I/O: `write_lab` / `write_textgrid` / `write_audacity` now accept both frame indices (int) and seconds (float). Added seconds output `write_lab_sec`.
 - **2025-03** — Added annotation workflow (`workflow/`). A notebook guides users through resampling, segmentation, automatic alignment, and merging.
 - **2025-03** — Added custom pre-trained model (`checkpoint/pyshiro-jp-v1.hsmm`). Trained from scratch on 19.4h across multiple voice databases. Supports `br` (breath) phoneme.
 

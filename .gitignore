@@ -27,3 +27,9 @@ example/cut_wav/*.wav
 
 # example 内の作業用フォルダ（念の為残すがコミットしない）
 example/kiritan_01/
+example/convert_labels_old/
+example/convert_labels/wav/*.wav
+
+# TextGrid 版（手修正確認用・コミット不要）
+example/convert_labels/fixed_textgrid_default/
+example/convert_labels/fixed_textgrid_recommended/
