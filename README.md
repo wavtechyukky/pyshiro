@@ -22,9 +22,15 @@
 - **トライフォン化**（`pyshiro.untie`）: モノフォンモデルをコンテキスト依存モデルへ変換（`shiro-untie` 相当）
 
 **入出力**
-- **ラベル出力**: `.lab`（HTK 100ns 整数形式・ENUNU / NNSVS / vLabeler 互換）、Praat TextGrid、Audacity ラベル
-- **ラベル読み込み**: `.lab`（HTK 100ns・秒単位を自動判定）、Audacity ラベル
+- **ラベル出力**: `.lab`（HTK 100ns 整数形式・ENUNU / NNSVS / vLabeler 互換）、`.lab`（秒単位スペース区切り）、Praat TextGrid、Audacity ラベル
+- **ラベル読み込み**: `.lab`（HTK 100ns・秒単位を自動判定）、TextGrid、Audacity ラベル
+- **書き出し関数のフレキシブルな入力**: `write_lab` / `write_textgrid` / `write_audacity` / `write_lab_sec` はフレームインデックス（int）と秒（float）のどちらでも受け付ける
 - **かな→音素変換**: ひらがな歌詞 → 音素列変換（ENUNU の変換テーブルをベースに同梱）
+
+**ラベル変換**
+- **外部ラベルの再ラベリング**: 他ツールで作成したラベルファイルを pyshiro モデルのアライメント基準に変換する（`realign_external_labels`）
+- 長い母音・pau をアンカーとして音声を区分し、各区間を HSMM で再アライメント
+- 修正する音素境界タイプを `--fix_transitions` で指定可能（例: 母音→子音・無音→子音のみ修正）
 
 ## インストール
 
@@ -191,22 +197,75 @@ train の対数尤度が改善し続けていても、テストデータの対�
 
 ## ラベル出力
 
+書き出し関数はフレームインデックス（`int`）と秒（`float`）のどちらでも受け付けます。
+
 ```python
 from pyshiro.labels import (
-    write_lab, write_textgrid, write_audacity,
+    write_lab, write_lab_sec, write_textgrid, write_audacity,
     read_lab, read_textgrid, read_audacity,
 )
 
-# 書き出し
-write_lab(intervals, "output.lab")           # .lab (HTK 100ns整数形式・ENUNU / NNSVS / vLabeler 互換)
+# 書き出し（フレームインデックスでも秒でも可）
+write_lab(intervals, "output.lab")           # HTK 100ns 整数（ENUNU / NNSVS / vLabeler 互換）
+write_lab_sec(intervals, "output.lab")       # 秒単位スペース区切り（同形式・値が秒）
 write_textgrid(intervals, "output.TextGrid") # Praat TextGrid
-write_audacity(intervals, "output.txt")      # Audacity ラベル
+write_audacity(intervals, "output.txt")      # Audacity ラベル（タブ区切り・秒）
 
 # 読み込み（手修正済みラベルを訓練データに戻す場合など）
-intervals = read_lab("corrected.lab")        # HTK 100ns / 秒単位を自動判定
+# read_lab は HTK 100ns 整数・秒単位のどちらも自動判定して秒で返す
+intervals = read_lab("corrected.lab")
 intervals = read_textgrid("corrected.TextGrid")
 intervals = read_audacity("corrected.txt")
 ```
+
+## ラベル変換（外部ラベルの再ラベリング）
+
+東北きりたん歌声DB などの外部ラベルを pyshiro モデルのアライメント基準に変換します。  
+詳細は **[workflow/convert_labels.ipynb](workflow/convert_labels.ipynb)** を参照してください。
+
+```bash
+python workflow/04_convert_labels.py \
+    audio.wav  external.lab \
+    --model    models/intunist-jp6_generic.hsmm \
+    --phonemap models/intunist-jp6_phonemap.json \
+    --out      converted.lab \
+    --format   lab_sec
+```
+
+主なオプション:
+
+| オプション | 説明 |
+|---|---|
+| `--format` | `lab`（HTK 100ns）/ `lab_sec`（秒）/ `textgrid` / `audacity` |
+| `--fix_transitions FROM-TO,...` | 修正する音素境界タイプをカンマ区切りで指定（省略時は全境界を修正）。`FROM`/`TO` は `silence` / `vowel` / `consonant`。例: `--fix_transitions vowel-consonant,silence-consonant,vowel-silence` |
+| `--anchor_vowel_min` | アンカーにする母音の最小長（秒, デフォルト 0.5） |
+| `--anchor_pau_min` | アンカーにする pau の最小長（秒, デフォルト 0.5） |
+| `--phoneme_map` | 音素名変換テーブル JSON（外部→pyshiro） |
+| `--unknown_phoneme_map` | 未知音素のアライメント時代替（例: `vy=v,fy=f`）。出力ラベルは元の音素名を維持 |
+
+## ラベルの外れ値チェック
+
+同一種類の子音のうち duration が外れ値のものを検出し、波形と音素ラベルを 1 枚の画像にまとめてプロットします。**短すぎる子音はラベリングに失敗している可能性が高い**、という経験則に基づくチェック用ツールです。
+
+```bash
+python workflow/05_check_consonant_outliers.py audio.wav labels.lab \
+    --side short \
+    --out outlier_plots.png
+```
+
+`--side short`（デフォルト）と `--side long` を選べますが、**実用上は短い側（short）を見ることがほとんど**です。長い側は閉鎖区間込みの正常な伸長が多く、明確な失敗の信号にはなりにくいためです。
+
+主なオプション:
+
+| オプション | デフォルト | 説明 |
+|---|---|---|
+| `--side` | `short` | 検出する外れ値の側（`short` / `long`）|
+| `--floor_ms` | `40` | [short] この長さ（ms）未満は無条件でフラグ |
+| `--max_dur_ms` | `50` | [short] この長さ未満かつ統計的外れ値を検出 |
+| `--iqr_k` | `1.5` | 通常子音の IQR 倍率 |
+| `--plosive_iqr_k` | `3.0` | 破裂音・破擦音の IQR 倍率（閉鎖込みで二峰性のため大きめ）|
+
+出力例: [example/convert_labels/outlier_plots/](example/convert_labels/outlier_plots/)（東北きりたん DB の変換結果に対する short 側プロット）
 
 ## スキップ可能音素の設定（pskip）
 
@@ -264,6 +323,19 @@ phonemap の音素エントリに `"pskip"` を指定すると、その音素が
 
 ## 更新履歴
 
+- **2026-06** — ラベル変換・品質チェック機能を追加。
+  - **ラベル変換**（`realign_external_labels` / `workflow/04_convert_labels.py`）: 他ツールで作成した外部ラベルを pyshiro モデルの基準に再ラベリング。長い母音・pau をアンカーに音声を区分し、各区間を HSMM で再アライメントする。修正する音素境界タイプを `--fix_transitions` で選択可能（例: `vowel-consonant,silence-consonant,vowel-silence` で母音→子音・無音→子音・母音→無音のみ修正）。詳しい手順は [workflow/convert_labels.ipynb](workflow/convert_labels.ipynb)。
+    ```bash
+    python workflow/04_convert_labels.py audio.wav external.lab \
+        --model M.hsmm --phonemap P.json --out out.lab --format lab_sec \
+        --fix_transitions vowel-consonant,silence-consonant,vowel-silence
+    ```
+  - **外れ値チェック**（`workflow/05_check_consonant_outliers.py`）: 同種子音内で duration が外れ値の箇所を検出し、波形＋音素ラベルを 1 枚にプロット。短すぎる子音はラベリング失敗の可能性が高いという経験則に基づく。実用上は `--side short`（デフォルト）を見ることがほとんど。
+    ```bash
+    python workflow/05_check_consonant_outliers.py audio.wav labels.lab \
+        --side short --out outliers.png
+    ```
+  - 入出力の拡充: `write_lab` / `write_textgrid` / `write_audacity` がフレームインデックス（int）・秒（float）の両入力に対応。秒単位出力 `write_lab_sec` を追加。
 - **2025-03** — アノテーションワークフロー（`workflow/`）を追加。音声の変換・分割・自動アライメント・結合までをノートブックでガイド。
 - **2025-03** — 独自訓練済みモデル（`checkpoint/pyshiro-jp-v1.hsmm`）を追加。複数歌声データベース計 19.4時間で追加訓練。`br`（吐息）音素に対応。
 

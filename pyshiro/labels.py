@@ -22,6 +22,19 @@ def _f(sec: float) -> str:
     return str(round(sec, _PREC))
 
 
+def _to_sec(v, is_frames: bool) -> float:
+    """フレームインデックスまたは秒を秒に変換する。"""
+    return v * HOP_TIME if is_frames else float(v)
+
+
+def _detect_frames(intervals) -> bool:
+    """
+    intervals の時刻がフレームインデックス（int）か秒（float）かを判定する。
+    最初の要素の型で判断: int → True（フレーム）、float → False（秒）。
+    """
+    return not isinstance(intervals[0][0], float)
+
+
 def segments_to_phoneme_intervals(
     phonemes: List[str],
     segments: List[Tuple[int, int]],
@@ -43,16 +56,41 @@ def segments_to_phoneme_intervals(
 # ENUNU .lab 形式 (HTK: 100ns 単位)
 # ---------------------------------------------------------------------------
 
-def write_lab(intervals: List[Tuple[int, int, str]],
-              out_path: Path) -> None:
+def write_lab(intervals, out_path: Path) -> None:
     """
     HTK/ENUNU 標準形式の .lab ファイルを書き出す。
     時刻単位: 100ナノ秒整数 (1秒 = 10,000,000)
     NNSVS / ENUNU / Sinsy / vLabeler に直接渡せる形式。
+
+    intervals の時刻はフレームインデックス（int）または秒（float）のどちらでも可。
     """
+    is_frames = _detect_frames(intervals)
     ns_per_frame = int(HOP_SIZE * 1e7 / SAMPLE_RATE)  # 500_000
-    lines = [f"{s * ns_per_frame} {e * ns_per_frame} {ph}"
-             for s, e, ph in intervals]
+    lines = []
+    for s, e, ph in intervals:
+        if is_frames:
+            lines.append(f"{s * ns_per_frame} {e * ns_per_frame} {ph}")
+        else:
+            lines.append(f"{round(s * 1e7)} {round(e * 1e7)} {ph}")
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_lab_sec(intervals, out_path: Path) -> None:
+    """
+    秒単位のスペース区切り .lab ファイルを書き出す。
+
+    形式: start_sec end_sec label  （HTK と同じスペース区切りだが値は秒の浮動小数）
+    例:
+        0.0 18.055 pau
+        18.055 18.4077 br
+
+    intervals の時刻はフレームインデックス（int）または秒（float）のどちらでも可。
+    """
+    is_frames = _detect_frames(intervals)
+    lines = [
+        f"{round(_to_sec(s, is_frames), _PREC)} {round(_to_sec(e, is_frames), _PREC)} {ph}"
+        for s, e, ph in intervals
+    ]
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -60,15 +98,16 @@ def write_lab(intervals: List[Tuple[int, int, str]],
 # Praat TextGrid 形式
 # ---------------------------------------------------------------------------
 
-def write_textgrid(intervals: List[Tuple[int, int, str]],
-                   out_path: Path,
+def write_textgrid(intervals, out_path: Path,
                    tier_name: str = "phoneme") -> None:
     """
     Praat TextGrid (.TextGrid) を書き出す。
-    時刻はフレーム→秒変換し、丸めてから書き出す。
+
+    intervals の時刻はフレームインデックス（int）または秒（float）のどちらでも可。
     """
-    xmin_s = _f(intervals[0][0]  * HOP_TIME)
-    xmax_s = _f(intervals[-1][1] * HOP_TIME)
+    is_frames = _detect_frames(intervals)
+    xmin_s = _f(_to_sec(intervals[0][0],   is_frames))
+    xmax_s = _f(_to_sec(intervals[-1][1],  is_frames))
     n      = len(intervals)
 
     lines = [
@@ -91,8 +130,8 @@ def write_textgrid(intervals: List[Tuple[int, int, str]],
     for i, (start, end, ph) in enumerate(intervals, 1):
         lines += [
             f"        intervals [{i}]:",
-            f"            xmin = {_f(start * HOP_TIME)}",
-            f"            xmax = {_f(end   * HOP_TIME)}",
+            f"            xmin = {_f(_to_sec(start, is_frames))}",
+            f"            xmax = {_f(_to_sec(end,   is_frames))}",
             f'            text = "{ph}"',
         ]
 
@@ -103,16 +142,18 @@ def write_textgrid(intervals: List[Tuple[int, int, str]],
 # Audacity ラベル形式
 # ---------------------------------------------------------------------------
 
-def write_audacity(intervals: List[Tuple[int, int, str]],
-                   out_path: Path) -> None:
+def write_audacity(intervals, out_path: Path) -> None:
     """
     Audacity ラベルファイル (.txt) を書き出す。
     形式: start_sec <TAB> end_sec <TAB> label  （1行1ラベル）
+
+    intervals の時刻はフレームインデックス（int）または秒（float）のどちらでも可。
     """
+    is_frames = _detect_frames(intervals)
     lines = []
     for start, end, ph in intervals:
-        s = round(start * HOP_TIME, _PREC)
-        e = round(end   * HOP_TIME, _PREC)
+        s = round(_to_sec(start, is_frames), _PREC)
+        e = round(_to_sec(end,   is_frames), _PREC)
         lines.append(f"{s}\t{e}\t{ph}")
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
