@@ -65,7 +65,7 @@ def write_lab(intervals, out_path: Path) -> None:
     intervals の時刻はフレームインデックス（int）または秒（float）のどちらでも可。
     """
     is_frames = _detect_frames(intervals)
-    ns_per_frame = int(HOP_SIZE * 1e7 / SAMPLE_RATE)  # 500_000
+    ns_per_frame = int(HOP_SIZE * 1e7 / SAMPLE_RATE)  # 50_000 (= 5ms / 100ns)
     lines = []
     for s, e, ph in intervals:
         if is_frames:
