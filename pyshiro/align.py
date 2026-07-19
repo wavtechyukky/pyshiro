@@ -186,7 +186,11 @@ def _gmm_loglik_frames(gmm: GMM, obs: np.ndarray) -> np.ndarray:
     loglik : (T,)
     """
     T = obs.shape[0]
-    loglik = np.zeros(T, dtype=np.float64)
+    # log-sum-exp の accumulator は log(0) = -inf で初期化する。
+    # 0（= log 1）で始めると log(Σ w·N) ではなく log(1 + Σ w·N) を計算してしまい、
+    # 対数尤度が +0.0 で下げ止まる。すると「このフレームはこの状態ではない」という
+    # 強い否定ができなくなり、識別が必要な音素境界でのみアライメントが破綻する。
+    loglik = np.full(T, -np.inf, dtype=np.float64)
 
     for m in range(gmm.nmix):
         mu  = gmm.means[m]        # (ndim,)
